@@ -1,0 +1,3 @@
+# Fetch git dependencies with the git CLI, so its credentials work for private repositories.
+[net]
+git-fetch-with-cli = true

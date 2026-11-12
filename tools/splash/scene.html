@@ -1,0 +1,235 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face { font-family: "Bricolage"; src: url(/bricolage.woff2) format("woff2"); font-weight: 200 800; font-stretch: 75% 100%; }
+  html, body { margin: 0; background: #000; }
+  canvas { display: block; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "/three/build/three.module.js", "three/addons/": "/three/examples/jsm/" } }
+</script>
+</head>
+<body>
+<script type="module">
+import * as THREE from "three";
+import { SVGLoader } from "three/addons/loaders/SVGLoader.js";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+
+const q = new URLSearchParams(location.search);
+const SCALE = Number(q.get("scale") || 2);
+const W = 520, H = 300;            // the splash, in pixels
+const FPS = Number(q.get("fps") || 20), LOOP = 3.6;        // seconds: the animation repeats seamlessly
+const FRAMES = Math.round(FPS * LOOP);
+
+// The logo, the same shapes as latief.id/smoothyfiles's hero (public/logo.svg).
+const BACK = "M129.37 0l157.46 0c35.27,0 65.63,12.57 90.57,37.52l14.27 14.27c24.94,24.94 55.3,37.52 90.57,37.52l415.66 0c70.55,0 128.09,57.54 128.09,128.09l0 574.32c0,70.55 -57.54,128.09 -128.09,128.09l-768.54 0c-70.55,0 -128.09,-57.54 -128.09,-128.09l0 -663.63c0,-70.55 57.54,-128.09 128.09,-128.09z";
+const FRONT = "M129.37 159.36l768.54 0c70.55,0 128.09,57.54 128.09,128.09l0 504.27c0,70.55 -57.54,128.09 -128.09,128.09l-768.54 0c-70.55,0 -128.09,-57.54 -128.09,-128.09l0 -504.27c0,-70.55 57.54,-128.09 128.09,-128.09z";
+const BOLT = "M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z";
+
+// seeded randomness: the same frames every run
+let seed = 7;
+const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+
+const renderer = new THREE.WebGLRenderer({ antialias: false, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W * SCALE, H * SCALE, false);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.2;
+
+const camZ = 4200;
+const camera = new THREE.PerspectiveCamera(30, W / H, 100, 20000);
+camera.position.set(0, 0, camZ);
+const wpp = (2 * camZ * Math.tan(THREE.MathUtils.degToRad(15))) / H; // world units per pixel at z = 0
+
+const loader = new SVGLoader();
+const shapesOf = (d) => loader.parse(`<svg xmlns="http://www.w3.org/2000/svg"><path d="${d}"/></svg>`).paths.flatMap((p) => SVGLoader.createShapes(p));
+const extrudeShapes = (shapes, depth, bevel, segments = 6) => {
+  const g = new THREE.ExtrudeGeometry(shapes, { depth, bevelEnabled: bevel > 0, bevelThickness: bevel, bevelSize: bevel * 0.8, bevelSegments: segments, curveSegments: 24 });
+  g.computeVertexNormals();
+  return g;
+};
+const boltShapes = (scale = 1) => shapesOf(BOLT).map((sh) => {
+  const pts = sh.getPoints(48).map((v) => new THREE.Vector2(v.x * 26 + 201, v.y * 26 + 227.5));
+  const c = pts.reduce((a, v) => a.add(v), new THREE.Vector2()).divideScalar(pts.length);
+  return new THREE.Shape(pts.map((v) => v.clone().sub(c).multiplyScalar(scale).add(c)));
+});
+
+const logo = new THREE.Group();
+const back = new THREE.Mesh(extrudeShapes(shapesOf(BACK), 70, 14), new THREE.MeshPhysicalMaterial({ color: 0x4a4a52, roughness: 0.42, metalness: 0.35, clearcoat: 0.6, clearcoatRoughness: 0.35 }));
+back.position.z = -80;
+const panel = shapesOf(FRONT);
+for (const hole of boltShapes(1.04)) panel[0].holes.push(new THREE.Path(hole.getPoints()));
+const front = new THREE.Mesh(extrudeShapes(panel, 70, 18), new THREE.MeshPhysicalMaterial({ color: 0x17171b, roughness: 0.36, metalness: 0.5, clearcoat: 1, clearcoatRoughness: 0.2 }));
+front.position.z = 10;
+const boltGeo = extrudeShapes(boltShapes(0.98), 40, 3, 3);
+boltGeo.computeBoundingBox();
+const bb = boltGeo.boundingBox;
+{
+  const pos = boltGeo.getAttribute("position");
+  const top = new THREE.Color(0xffd2a6), bottom = new THREE.Color(0xff5a0a), c = new THREE.Color();
+  const colors = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    c.copy(top).lerp(bottom, (pos.getY(i) - bb.min.y) / (bb.max.y - bb.min.y));
+    c.toArray(colors, i * 3);
+  }
+  boltGeo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+}
+const boltMat = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, emissive: 0xff5a10, emissiveIntensity: 2.0, roughness: 0.3, metalness: 0.05 });
+const bolt = new THREE.Mesh(boltGeo, boltMat);
+bolt.position.z = -2;
+logo.add(back, front, bolt);
+logo.scale.y = -1;
+const box = new THREE.Box3().setFromObject(logo);
+const centre = box.getCenter(new THREE.Vector3());
+const size = box.getSize(new THREE.Vector3());
+logo.position.sub(centre);
+const boltCentre = new THREE.Vector3((bb.min.x + bb.max.x) / 2 - centre.x, -((bb.min.y + bb.max.y) / 2) - centre.y, 60);
+
+const pivot = new THREE.Group();
+pivot.add(logo);
+const anchor = new THREE.Group();
+anchor.add(pivot);
+scene.add(anchor);
+// the logo on the left third, ~170 px tall
+const LOGO_X = 150, LOGO_Y = 146, LOGO_PX = 172;
+anchor.position.set((LOGO_X - W / 2) * wpp, -(LOGO_Y - H / 2) * wpp, 0);
+anchor.scale.setScalar((LOGO_PX * wpp) / Math.max(size.x, size.y));
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.22));
+const key = new THREE.DirectionalLight(0xfff2e6, 2.2); key.position.set(-900, 1200, 1600); scene.add(key);
+const rim = new THREE.DirectionalLight(0xff7a2e, 3.4); rim.position.set(1200, -400, -900); scene.add(rim);
+const slot = new THREE.PointLight(0xff7a2a, 5, 150, 2); slot.position.set(boltCentre.x, boltCentre.y, 70); pivot.add(slot);
+const spill = new THREE.PointLight(0xff6a1a, 1.4, 520, 2); spill.position.set(boltCentre.x, boltCentre.y, 220); pivot.add(spill);
+
+// the ember ribbon sweeping behind, across the whole splash
+const curve = new THREE.CatmullRomCurve3([
+  new THREE.Vector3(-1700, -560, -260), new THREE.Vector3(-1000, -400, -200), new THREE.Vector3(-480, -40, -320),
+  new THREE.Vector3(120, 60, -380), new THREE.Vector3(700, 300, -300), new THREE.Vector3(1300, 520, -220), new THREE.Vector3(2000, 640, -260),
+].map((v) => v.multiplyScalar(1.15)));
+const ribbon = new THREE.Mesh(new THREE.TubeGeometry(curve, 400, 3.2, 8, false), new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.38, 0.08).multiplyScalar(2.4) }));
+ribbon.position.set(0, -60, 0);
+scene.add(ribbon);
+const runner = new THREE.Mesh(new THREE.SphereGeometry(7, 16, 16), new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.75, 0.45).multiplyScalar(9) }));
+// (the spark that runs along the ribbon on the site stays out: crossing the whole picture, it
+// would change every pixel row of every frame and triple the GIF)
+
+// embers rising off the bolt: each repeats a whole number of times per loop
+const sprite = (() => {
+  const c = document.createElement("canvas"); c.width = c.height = 64;
+  const g = c.getContext("2d");
+  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0, "rgba(255,255,255,1)"); grad.addColorStop(0.35, "rgba(255,255,255,0.55)"); grad.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = grad; g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+})();
+const N = 40;
+const sp = new Float32Array(N * 3), sc = new Float32Array(N * 3);
+const em = [];
+for (let i = 0; i < N; i++) {
+  em.push({
+    x: boltCentre.x + (rnd() - 0.5) * 260, y: boltCentre.y + (rnd() - 0.5) * 300, z: boltCentre.z + rnd() * 60,
+    vx: (rnd() - 0.35) * 40, vy: 110 + rnd() * 160, vz: 20 + rnd() * 60,
+    reps: 1 + Math.floor(rnd() * 2), phase: rnd(),
+  });
+}
+const sparkGeo = new THREE.BufferGeometry();
+sparkGeo.setAttribute("position", new THREE.BufferAttribute(sp, 3));
+sparkGeo.setAttribute("color", new THREE.BufferAttribute(sc, 3));
+pivot.add(new THREE.Points(sparkGeo, new THREE.PointsMaterial({ size: 16, map: sprite, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true })));
+
+// dot grid far behind (too dim to bloom)
+{
+  const depth = 2600, k = (camZ + depth) / camZ, step = 18 * wpp * k;
+  const cols = Math.ceil(W / 18) + 2, rows = Math.ceil(H / 18) + 2;
+  const pts = new Float32Array(cols * rows * 3);
+  let n = 0;
+  for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) { pts[n++] = (x - cols / 2) * step; pts[n++] = (y - rows / 2) * step; pts[n++] = -depth; }
+  const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.BufferAttribute(pts, 3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0x2a2a2e, size: 1.6 * SCALE, sizeAttenuation: false })));
+}
+
+const target = new THREE.WebGLRenderTarget(W * SCALE, H * SCALE, { type: THREE.HalfFloatType, samples: 4 });
+const composer = new EffectComposer(renderer, target);
+composer.setPixelRatio(1);
+composer.setSize(W * SCALE, H * SCALE);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(W * SCALE, H * SCALE), 0.55, 0.35, 0.92));
+composer.addPass(new OutputPass());
+
+// the 2-D canvas the frame is put together on: the scene, then the name
+const out = document.createElement("canvas");
+out.width = W * SCALE; out.height = H * SCALE;
+document.body.appendChild(out);
+const ctx = out.getContext("2d");
+
+const ember = new THREE.Color();
+function frame(t) {
+  const a = (2 * Math.PI * t) / LOOP;
+  pivot.rotation.y = Math.sin(a) * 0.42 - 0.12;
+  pivot.rotation.x = 0.1 + Math.sin(2 * a) * 0.05;
+  pivot.position.y = Math.sin(a + 0.6) * 22;
+  const breath = Math.sin(2 * a) * 0.5 + Math.sin(5 * a) * 0.15;
+  boltMat.emissiveIntensity = 2.0 + breath * 0.6;
+  spill.intensity = 1.4 + breath * 0.5;
+  slot.intensity = 5 + breath * 1.5;
+  const u = (t / LOOP) % 1;
+  runner.position.copy(curve.getPointAt(u)).add(ribbon.position);
+  runner.scale.setScalar(0.6 + Math.sin(u * Math.PI) * 0.8);
+  for (let i = 0; i < N; i++) {
+    const e = em[i];
+    const life = (u * e.reps + e.phase) % 1;
+    const age = life * (LOOP / e.reps);
+    sp[i * 3] = e.x + e.vx * age + Math.sin(a * 2 + i) * 6;
+    sp[i * 3 + 1] = e.y + e.vy * age;
+    sp[i * 3 + 2] = e.z + e.vz * age;
+    const fade = Math.sin(Math.min(life * 1.4, 1) * Math.PI) * (1 - life);
+    ember.setRGB(1, 0.45 - life * 0.25, 0.12 - life * 0.1).multiplyScalar(3.5 * fade);
+    ember.toArray(sc, i * 3);
+  }
+  sparkGeo.attributes.position.needsUpdate = true;
+  sparkGeo.attributes.color.needsUpdate = true;
+  composer.render(1 / FPS);
+
+  ctx.drawImage(renderer.domElement, 0, 0);
+  ctx.save();
+  ctx.scale(SCALE, SCALE);
+  ctx.font = "700 50px Bricolage";
+  ctx.letterSpacing = "-1px";
+  ctx.textBaseline = "alphabetic";
+  // a soft dark halo first, so the ribbon fades out behind the letters instead of crossing them
+  ctx.shadowColor = "rgba(0,0,0,0.95)";
+  ctx.shadowBlur = 16 * SCALE;
+  ctx.fillStyle = "#000";
+  for (let k = 0; k < 3; k++) ctx.fillText("smoothyfiles", 268, 166);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = "#f2f0ec";
+  ctx.fillText("smoothyfiles", 268, 166);
+  ctx.restore();
+  return out.toDataURL("image/png");
+}
+
+await document.fonts.load("700 50px Bricolage");
+if (q.has("still")) {
+  frame(Number(q.get("still")));
+} else {
+  for (let i = 0; i < FRAMES; i++) {
+    const png = frame(i / FPS);
+    await fetch(`/frame?i=${i}`, { method: "POST", body: png });
+  }
+  await fetch("/done", { method: "POST" });
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+[package]
+name = "rf-player"
+description = "Pure-Rust media player for the preview: FilmCraft decoders, WASAPI audio, D3D11 video"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+rayon.workspace = true
+filmcraft-media.workspace = true
+filmcraft-codecs.workspace = true
+filmcraft-frame.workspace = true
+filmcraft-color.workspace = true
+filmcraft-time.workspace = true
+windows.workspace = true

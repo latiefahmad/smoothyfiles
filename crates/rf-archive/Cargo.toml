@@ -1,0 +1,34 @@
+[package]
+name = "rf-archive"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tar.workspace = true
+flate2.workspace = true
+zstd.workspace = true
+bzip2 = "0.6"
+crc32fast.workspace = true
+zip.workspace = true
+sevenz-rust2.workspace = true
+lzma-rust2.workspace = true
+# our archive engine (crates.io/crates/rarchive, github.com/gelenmedya/rarchive)
+rarchive = "0.1"
+hadris-iso.workspace = true
+hadris-fs.workspace = true
+hadris-io.workspace = true
+hadris-udf.workspace = true
+hadris-storage.workspace = true
+
+windows = { workspace = true, features = ["Win32_System_Time", "Win32_Globalization", "Win32_System_Registry", "Win32_Foundation"] }
+
+[dev-dependencies]
+crc32fast.workspace = true
+# the ISO writer is only used to build test images
+hadris-iso = { workspace = true, features = ["write"] }
+hadris-fs = { workspace = true, features = ["std"] }
+hadris-storage = { workspace = true }
+hadris-udf = { workspace = true, features = ["write"] }

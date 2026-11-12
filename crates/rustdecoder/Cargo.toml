@@ -1,0 +1,20 @@
+[package]
+name = "rustdecoder"
+description = "smoothyfiles' own video engine: container and bitstream parsing in Rust, decoding on the GPU's video engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+rayon.workspace = true
+log.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+windows-core.workspace = true
+
+[dev-dependencies]
+flate2.workspace = true
+crc32fast.workspace = true

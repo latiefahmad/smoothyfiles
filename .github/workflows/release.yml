@@ -1,0 +1,40 @@
+name: Release
+
+# Push a tag like v0.1.0: builds, packs with Velopack (Setup.exe, portable zip, update
+# packages) and publishes the GitHub release that installed copies update from.
+on:
+  push:
+    tags: ["smoothyfiles-v*", "v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release -p rf-app -p rf-dialog
+      - name: Version
+        id: v
+        shell: pwsh
+        run: |
+          "version=$('${{ github.ref_name }}' -replace '^(smoothyfiles-)?v', '')" | Out-File -Append $env:GITHUB_OUTPUT
+      - name: Collect files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory publish | Out-Null
+          Copy-Item target/release/smoothyfiles.exe, target/release/directlook.exe, target/release/smoothyfiles_dialog.dll, LICENSE publish
+      - name: Install vpk
+        # same version as the velopack crate in crates/rf-app/Cargo.toml
+        run: dotnet tool install -g vpk --version 1.2.161
+      - name: Previous release (for delta updates)
+        continue-on-error: true
+        run: vpk download github --repoUrl https://github.com/${{ github.repository }} --token ${{ github.token }}
+      - name: Pack
+        run: vpk pack -u smoothyfiles -v ${{ steps.v.outputs.version }} -p publish -e smoothyfiles.exe --packTitle smoothyfiles --packAuthors "Latief Ahmad" -i crates/rf-app/assets/smoothyfiles.ico -s crates/rf-app/assets/splash.gif --splashProgressColor "#ff6a1a"
+      - name: Publish
+        run: vpk upload github --repoUrl https://github.com/${{ github.repository }} --token ${{ github.token }} --publish --releaseName "smoothyfiles ${{ steps.v.outputs.version }}" --tag ${{ github.ref_name }}

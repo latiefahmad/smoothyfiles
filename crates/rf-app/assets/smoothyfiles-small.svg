@@ -1,0 +1,22 @@
+<!-- smoothyfiles logo: SF monogram, 16-24 px version (no glow / rim light, larger letters). Source of tools/make_icon.py -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.00 -53.09 1027.28 1027.28">
+  <defs>
+    <linearGradient id="backd1201" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="801">
+      <stop offset="0" stop-color="#4a4a4f"/><stop offset="1" stop-color="#1c1c1f"/>
+    </linearGradient>
+    <linearGradient id="frontd1201" gradientUnits="userSpaceOnUse" x1="0" y1="159" x2="0" y2="800">
+      <stop offset="0" stop-color="#2c2c31"/><stop offset="1" stop-color="#050506"/>
+    </linearGradient>
+    <linearGradient id="rimd1201" gradientUnits="userSpaceOnUse" x1="0" y1="159" x2="0" y2="420">
+      <stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="sfd1201" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0" stop-color="#ffd2a6"/><stop offset="1" stop-color="#ff6a1a"/>
+    </linearGradient>
+    <clipPath id="fcd1201"><path d="M129.37 159.36l768.54 0c70.55,0 128.09,57.54 128.09,128.09l0 504.27c0,70.55 -57.54,128.09 -128.09,128.09l-768.54 0c-70.55,0 -128.09,-57.54 -128.09,-128.09l0 -504.27c0,-70.55 57.54,-128.09 128.09,-128.09z"/></clipPath>
+  </defs>
+  <path d="M129.37 0l157.46 0c35.27,0 65.63,12.57 90.57,37.52l14.27 14.27c24.94,24.94 55.3,37.52 90.57,37.52l415.66 0c70.55,0 128.09,57.54 128.09,128.09l0 504.27c0,70.55 -57.54,128.09 -128.09,128.09l-768.54 0c-70.55,0 -128.09,-57.54 -128.09,-128.09l0 -593.58c0,-70.55 57.54,-128.09 128.09,-128.09z" fill="url(#backd1201)"/>
+  <path d="M129.37 159.36l768.54 0c70.55,0 128.09,57.54 128.09,128.09l0 504.27c0,70.55 -57.54,128.09 -128.09,128.09l-768.54 0c-70.55,0 -128.09,-57.54 -128.09,-128.09l0 -504.27c0,-70.55 57.54,-128.09 128.09,-128.09z" fill="url(#frontd1201)"/>
+  <path d="M129.37 159.36l768.54 0c70.55,0 128.09,57.54 128.09,128.09l0 504.27c0,70.55 -57.54,128.09 -128.09,128.09l-768.54 0c-70.55,0 -128.09,-57.54 -128.09,-128.09l0 -504.27c0,-70.55 57.54,-128.09 128.09,-128.09z" fill="none" stroke="url(#rimd1201)" stroke-width="5"/>
+  <text x="578" y="655" text-anchor="middle" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif" font-weight="800" font-size="380" letter-spacing="4" fill="url(#sfd1201)">SF</text>
+</svg>

@@ -1,0 +1,15 @@
+name: Feature request
+description: Something smoothyfiles should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like?
+      description: Describe what you want to do. If another file manager does it well, tell us which one.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why does it matter to you?

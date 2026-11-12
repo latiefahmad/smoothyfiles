@@ -1,0 +1,31 @@
+[package]
+name = "rf-win"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+image = { workspace = true, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "tga", "qoi", "exr", "hdr", "dds", "pnm"] }
+resvg = { version = "0.46", default-features = false, features = ["text", "system-fonts", "memmap-fonts", "raster-images"] }
+kamadak-exif = "0.6"
+psd = "0.3"
+# design files' own pictures are ZIP entries (CorelDRAW, Krita, Sketch…): see design.rs
+zip.workspace = true
+rf-core.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+smallvec.workspace = true
+crossbeam-channel.workspace = true
+windows.workspace = true
+windows-core.workspace = true
+notify.workspace = true
+windows-registry = "0.6"
+rayon.workspace = true
+serde.workspace = true
+md-5.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+crc32fast.workspace = true

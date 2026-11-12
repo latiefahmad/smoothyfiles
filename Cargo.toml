@@ -1,0 +1,147 @@
+[workspace]
+resolver = "3"
+members = ["crates/rf-core", "crates/rf-win", "crates/rf-app", "crates/rf-archive", "crates/rf-dialog", "crates/rf-player", "crates/rustdecoder", "tools/gpustress"]
+
+[workspace.package]
+version = "0.6.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+rf-core = { path = "crates/rf-core" }
+rf-win = { path = "crates/rf-win" }
+rf-player = { path = "crates/rf-player" }
+rustdecoder = { path = "crates/rustdecoder" }
+# FilmCraft (MIT OR Apache-2.0): saf Rust kapsayıcı ve kodek çözücüleri, sabit commit.
+filmcraft-media = { git = "https://github.com/storytold/filmcraft", rev = "c2f65871e998cca4700a74dbcf9348cab51fb06b" }
+filmcraft-codecs = { git = "https://github.com/storytold/filmcraft", rev = "c2f65871e998cca4700a74dbcf9348cab51fb06b" }
+filmcraft-frame = { git = "https://github.com/storytold/filmcraft", rev = "c2f65871e998cca4700a74dbcf9348cab51fb06b" }
+filmcraft-color = { git = "https://github.com/storytold/filmcraft", rev = "c2f65871e998cca4700a74dbcf9348cab51fb06b" }
+filmcraft-time = { git = "https://github.com/storytold/filmcraft", rev = "c2f65871e998cca4700a74dbcf9348cab51fb06b" }
+gpui-kit = "0.9.0"
+anyhow = "1"
+thiserror = "2"
+log = "0.4"
+parking_lot = "0.12"
+smallvec = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+crossbeam-channel = "0.5"
+futures = "0.3"
+notify = "8"
+raw-window-handle = "0.6"
+image = { version = "0.25", default-features = false }
+rayon = "1"
+dirs = "6"
+chrono = "0.4"
+natord = "1"
+md-5 = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"
+crc32fast = "1"
+regex = "1"
+rf-archive = { path = "crates/rf-archive" }
+tar = { version = "0.4", default-features = false }
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+zstd = { version = "0.14", default-features = false, features = ["zstdmt"] }
+zip = { version = "9.3", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate64", "aes-crypto"] }
+sevenz-rust2 = { version = "0.24", default-features = false, features = ["compress", "aes256"] }
+hadris-iso = { version = "3.0.0-rc.3", default-features = false, features = ["std", "sync"] }
+hadris-fs = "3.0.0-rc.3"
+hadris-io = "3.0.0-rc.3"
+hadris-udf = { version = "3.0.0-rc.3", default-features = false, features = ["std", "sync"] }
+hadris-storage = "3.0.0-rc.3"
+lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "xz", "encoder"] }
+windows = { version = "0.62", features = [
+    "Data_Pdf",
+    "Storage",
+    "Storage_Streams",
+    "Foundation",
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_Storage_Xps",
+    "Win32_NetworkManagement_NetManagement",
+    "Win32_Networking_WinInet",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Ole",
+    "Win32_System_Threading",
+    "Win32_System_Search",
+    "Win32_System_Variant",
+    "Win32_System_SystemServices",
+    "Win32_System_Performance",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Registry",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Pipes",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_Storage_EnhancedStorage",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_WinTrust",
+    "Win32_UI_Accessibility",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Controls",
+    "Win32_Globalization",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_GdiPlus",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D_Fxc",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Imaging",
+    "Win32_NetworkManagement_WNet",
+    "Win32_Media_Audio",
+    "Win32_Media_MediaFoundation",
+] }
+windows-core = "0.62"
+
+[profile.dev]
+# Keep debug builds snappy: optimize deps, keep our code debuggable.
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
+
+# hot loops (natural sort of 100k names) stay fast in debug builds too
+[profile.dev.package.rf-core]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+panic = "abort"
+strip = true
+debug = false
+
+# Iterating on optimized builds: release without LTO, incremental. A one-line change in rf-app
+# took 144 s with --release (thin LTO links the two exes) against ~10 s in dev (measured by the
+# rustbuilder session). Speed numbers and published builds still come from --release.
+#   cargo build --profile fast -p rf-app   →   target/fast/smoothyfiles.exe
+[profile.fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
+
+[patch.crates-io]
+# our fork of GPUI's Windows layer (GPU/CPU hot-swap renderer), see its FORK.md
+gpui-pre-windows = { git = "https://github.com/gelenmedya/gpui-pre-windows", rev = "e2966a6c332e5e96ebb1acbb6eedc18ea652fab5" }

@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360">
+  <title>smoothyfiles: a file manager for Windows that never freezes</title>
+  <defs>
+    <linearGradient id="smb-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F7F7F8"/><stop offset="1" stop-color="#EDEDF0"/>
+    </linearGradient>
+    <radialGradient id="smb-ember" cx="120" cy="180" r="260" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF6A1A" stop-opacity="0.10"/><stop offset="1" stop-color="#FF6A1A" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="smb-sf" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#FFD2A6"/><stop offset="1" stop-color="#FF6A1A"/>
+    </linearGradient>
+    <linearGradient id="smb-back" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4A4A4F"/><stop offset="1" stop-color="#1C1C1F"/>
+    </linearGradient>
+    <linearGradient id="smb-front" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2C2C31"/><stop offset="1" stop-color="#0A0A0C"/>
+    </linearGradient>
+    <radialGradient id="smb-glow" cx="256" cy="308" r="210" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF6A1A" stop-opacity="0.30"/><stop offset="1" stop-color="#FF6A1A" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="smb-frontclip"><rect x="96" y="172" width="320" height="254" rx="60"/></clipPath>
+    <clipPath id="smb-win"><rect x="0.5" y="0.5" width="1279" height="359" rx="12"/></clipPath>
+  </defs>
+  <g clip-path="url(#smb-win)">
+    <rect width="1280" height="360" fill="url(#smb-bg)"/>
+    <rect width="1280" height="360" fill="url(#smb-ember)"/>
+    <!-- SF monogram (folder + initials) -->
+    <svg x="64" y="96" width="168" height="168" viewBox="96 86 320 340">
+      <path d="M96 160c0-35.3 28.7-64 64-64h80c18.6 0 36.4 7.4 49.5 20.5l15 15c13.1 13.1 30.9 20.5 49.5 20.5h55c35.3 0 64 28.7 64 64v146c0 35.3-28.7 64-64 64H160c-35.3 0-64-28.7-64-64z" fill="url(#smb-back)"/>
+      <rect x="96" y="172" width="320" height="254" rx="60" fill="url(#smb-front)"/>
+      <rect x="96" y="172" width="320" height="254" fill="url(#smb-glow)" clip-path="url(#smb-frontclip)"/>
+      <text x="256" y="356" text-anchor="middle" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif" font-weight="800" font-size="148" letter-spacing="4" fill="url(#smb-sf)">SF</text>
+    </svg>
+    <!-- wordmark -->
+    <text x="272" y="196" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif" font-weight="800" font-size="78" fill="#1B1B1B">smoothyfiles</text>
+    <text x="276" y="244" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif" font-size="28" fill="#5C5C61">A file manager for Windows that never freezes.</text>
+    <text x="276" y="284" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif" font-size="22" fill="#8A8A90">Tabs, dual panes, archives as folders, and DirectLook previews.</text>
+    <!-- bottom status strip -->
+    <rect x="0" y="308" width="1280" height="52" fill="#FAFAFA"/>
+    <rect x="0" y="308" width="1280" height="1" fill="#E3E3E6"/>
+    <text x="64" y="340" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif" font-size="20" fill="#5C5C61">100,000 files</text>
+    <text x="1216" y="340" text-anchor="end" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif" font-size="20" fill="#8A8A90">listed in 168 ms</text>
+  </g>
+  <rect x="0.5" y="0.5" width="1279" height="359" rx="12" fill="none" stroke="#E3E3E6"/>
+</svg>

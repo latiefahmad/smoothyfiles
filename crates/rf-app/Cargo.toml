@@ -1,0 +1,54 @@
+[package]
+name = "rf-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "smoothyfiles"
+path = "src/main.rs"
+
+[[bin]]
+name = "directlook"
+path = "src/bin/directlook.rs"
+
+[dependencies]
+# the speed test asks latief.id/smoothyfiles for a short result link (already in the tree through velopack)
+ureq = "3.5"
+rf-core.workspace = true
+rf-win.workspace = true
+# the Open/Save dialog request types (the DLL itself is a separate build output)
+rf-dialog = { path = "../rf-dialog" }
+# installer and auto-update (GitHub Releases)
+velopack = "=1.2.161"
+rf-archive.workspace = true
+rf-player.workspace = true
+rustdecoder.workspace = true
+gpui-kit.workspace = true
+anyhow.workspace = true
+log.workspace = true
+env_logger = "0.11"
+# Our fork (github.com/gelenmedya/gpui-pre-windows, hybrid GPU/CPU renderer); `gpui_windows::hybrid` is the public API.
+gpui-pre-windows = "0.3.11"
+parking_lot.workspace = true
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+smallvec.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# font previews (already in the tree through resvg)
+ttf-parser = "0.25"
+# DirectLook: e-mail (.eml) previews
+mail-parser = "1.0"
+toml.workspace = true
+dirs.workspace = true
+crossbeam-channel.workspace = true
+futures.workspace = true
+image.workspace = true
+raw-window-handle.workspace = true
+windows-registry = "0.6"
+chrono.workspace = true
+windows.workspace = true
+
+[build-dependencies]
+embed-resource = "3"

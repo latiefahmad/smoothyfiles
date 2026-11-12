@@ -1,0 +1,6 @@
+/target
+*.pdb
+/.claude/
+.superpowers/
+/notes/
+/smoothyfilescom/

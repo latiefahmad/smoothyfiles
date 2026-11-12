@@ -1,0 +1,17 @@
+[package]
+name = "rf-dialog"
+description = "smoothyfiles as the Open / Save dialog: a COM server DLL loaded into other apps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "smoothyfiles_dialog"
+# the DLL other apps load, and a library for the request types smoothyfiles reads
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+windows.workspace = true
+windows-core = "0.62"
+serde.workspace = true
+serde_json.workspace = true

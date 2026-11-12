@@ -1,0 +1,39 @@
+name: Bug report
+description: Something doesn't work or looks wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time! A screenshot and the steps to make it happen help the most.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did smoothyfiles do instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a folder with …
+        2. Press …
+        3. …
+  - type: input
+    id: version
+    attributes:
+      label: smoothyfiles version
+      description: Settings → About shows it (for example "0.3.2 · 3fb55fc").
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2
+  - type: textarea
+    id: log
+    attributes:
+      label: Log or screenshot
+      description: Settings → About → "Open log and settings folder" has the log. Paste the relevant lines or attach a screenshot.

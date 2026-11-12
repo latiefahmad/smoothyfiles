@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.9.0.schema.json
+PackageIdentifier: latiefahmad.smoothyfiles
+PackageVersion: 0.3.2
+InstallerLocale: en-US
+Platform:
+- Windows.Desktop
+MinimumOSVersion: 10.0.19041.0
+InstallerType: exe
+Scope: user
+InstallModes:
+- interactive
+- silent
+InstallerSwitches:
+  Silent: --silent
+  SilentWithProgress: --silent
+UpgradeBehavior: install
+ReleaseDate: 2026-11-08
+AppsAndFeaturesEntries:
+- DisplayName: smoothyfiles
+  Publisher: Latief Ahmad
+  ProductCode: smoothyfiles
+Installers:
+- Architecture: x64
+  InstallerUrl: https://github.com/latiefahmad/smoothyfiles/releases/download/v0.3.2/smoothyfiles-win-Setup.exe
+  InstallerSha256: 04AE51D42296219E1AB96346C73D7DCAB35D551731656B3AB5DE8A609AABEC08
+ManifestType: installer
+ManifestVersion: 1.9.0
