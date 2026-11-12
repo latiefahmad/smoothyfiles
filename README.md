@@ -11,7 +11,7 @@ The window never waits on the disk. Listing, icons, thumbnails, the context menu
 operation run off the UI thread, so a slow network share or a folder with 100,000 files can't
 freeze it.
 
-smoothyfiles is maintained and published by **Latief Ahmad**.
+smoothyfiles is maintained and published by **latiefahmad**.
 
 <p align="center">
   <a href="https://latief.id/smoothyfiles"><img alt="Download for Windows" src="https://img.shields.io/badge/Download_for_Windows-FF6A1A?style=for-the-badge&logo=windows11&logoColor=white"></a>

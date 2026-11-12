@@ -35,6 +35,6 @@ jobs:
         continue-on-error: true
         run: vpk download github --repoUrl https://github.com/${{ github.repository }} --token ${{ github.token }}
       - name: Pack
-        run: vpk pack -u smoothyfiles -v ${{ steps.v.outputs.version }} -p publish -e smoothyfiles.exe --packTitle smoothyfiles --packAuthors "Latief Ahmad" -i crates/rf-app/assets/smoothyfiles.ico -s crates/rf-app/assets/splash.gif --splashProgressColor "#ff6a1a"
+        run: vpk pack -u smoothyfiles -v ${{ steps.v.outputs.version }} -p publish -e smoothyfiles.exe --packTitle smoothyfiles --packAuthors "latiefahmad" -i crates/rf-app/assets/smoothyfiles.ico -s crates/rf-app/assets/splash.gif --splashProgressColor "#ff6a1a"
       - name: Publish
         run: vpk upload github --repoUrl https://github.com/${{ github.repository }} --token ${{ github.token }} --publish --releaseName "smoothyfiles ${{ steps.v.outputs.version }}" --tag ${{ github.ref_name }}

@@ -2,15 +2,15 @@
 PackageIdentifier: latiefahmad.smoothyfiles
 PackageVersion: 0.3.2
 PackageLocale: en-US
-Publisher: Latief Ahmad
+Publisher: latiefahmad
 PublisherUrl: https://github.com/latiefahmad
 PublisherSupportUrl: https://github.com/latiefahmad/smoothyfiles/issues
-Author: Latief Ahmad
+Author: latiefahmad
 PackageName: smoothyfiles
 PackageUrl: https://latief.id/smoothyfiles
 License: MIT
 LicenseUrl: https://github.com/latiefahmad/smoothyfiles/blob/main/LICENSE
-Copyright: Copyright (c) Latief Ahmad
+Copyright: Copyright (c) latiefahmad
 ShortDescription: A fast, free and open-source file manager for Windows, written in Rust, that never freezes.
 Description: |-
   smoothyfiles is a file manager for Windows, written from scratch in Rust, meant to replace File Explorer for everyday work. The window never waits on the disk: listing, icons, thumbnails, previews and file operations run off the UI thread, so a slow network share or a folder with 100,000 files can't freeze it.

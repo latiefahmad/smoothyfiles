@@ -17,7 +17,7 @@ UpgradeBehavior: install
 ReleaseDate: 2026-11-08
 AppsAndFeaturesEntries:
 - DisplayName: smoothyfiles
-  Publisher: Latief Ahmad
+  Publisher: latiefahmad
   ProductCode: smoothyfiles
 Installers:
 - Architecture: x64
