@@ -417,6 +417,11 @@ mod tests {
         // the wait ends with the selection, not at its limit
         assert!(took < Duration::from_secs(5), "{took:?}");
         let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(got.as_deref().map(|p| p.to_string_lossy().to_lowercase()), Some(file.to_string_lossy().to_lowercase()));
+        // the shell hands back the long path; temp_dir can be a short (8.3) path on some
+        // runners, so both sides go through canonicalize (the long form) before comparing
+        let norm = |p: &std::path::Path| {
+            std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().to_lowercase()
+        };
+        assert_eq!(got.as_deref().map(norm).as_deref(), Some(norm(&file).as_str()));
     }
 }
