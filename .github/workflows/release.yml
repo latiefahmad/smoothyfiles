@@ -14,6 +14,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # full history + tags: the changelog step lists commits since the previous tag
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
@@ -38,3 +41,24 @@ jobs:
         run: vpk pack -u smoothyfiles -v ${{ steps.v.outputs.version }} -p publish -e smoothyfiles.exe --packTitle smoothyfiles --packAuthors "latiefahmad" -i crates/rf-app/assets/smoothyfiles.ico -s crates/rf-app/assets/splash.gif --splashProgressColor "#ff6a1a"
       - name: Publish
         run: vpk upload github --repoUrl https://github.com/${{ github.repository }} --token ${{ github.token }} --publish --releaseName "smoothyfiles ${{ steps.v.outputs.version }}" --tag ${{ github.ref_name }}
+      - name: Changelog
+        # vpk creates the release with an empty body; fill it with the commits since the
+        # previous tag. If this step fails, the release still stands with its assets.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $tags = git tag --sort=-creatordate | Where-Object { $_ -match '^(smoothyfiles-)?v' }
+          $prev = $tags | Select-Object -Skip 1 -First 1
+          $notes = "## What's changed`n`n"
+          if ($prev) {
+            $notes += (git log --format='- %s (%h)' "$prev..$tag" | Out-String).TrimEnd()
+            $notes += "`n`n**Full changelog:** https://github.com/${{ github.repository }}/compare/$prev...$tag"
+          } else {
+            $notes += "- Initial release."
+          }
+          $f = Join-Path $env:RUNNER_TEMP notes.md
+          [System.IO.File]::WriteAllText($f, $notes, [System.Text.UTF8Encoding]::new($false))
+          gh release edit $tag --notes-file $f
