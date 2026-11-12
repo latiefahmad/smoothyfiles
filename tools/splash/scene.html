@@ -205,17 +205,24 @@ function frame(t) {
   ctx.drawImage(renderer.domElement, 0, 0);
   ctx.save();
   ctx.scale(SCALE, SCALE);
-  ctx.font = "700 50px Bricolage";
+  // fit the name between x = 268 and the right margin (it is longer than the old one)
+  const name = "smoothyfiles";
+  let fs = 50;
+  ctx.font = `700 ${fs}px Bricolage`;
+  while (fs > 24 && 268 + ctx.measureText(name).width > 496) {
+    fs -= 1;
+    ctx.font = `700 ${fs}px Bricolage`;
+  }
   ctx.letterSpacing = "-1px";
   ctx.textBaseline = "alphabetic";
   // a soft dark halo first, so the ribbon fades out behind the letters instead of crossing them
   ctx.shadowColor = "rgba(0,0,0,0.95)";
   ctx.shadowBlur = 16 * SCALE;
   ctx.fillStyle = "#000";
-  for (let k = 0; k < 3; k++) ctx.fillText("smoothyfiles", 268, 166);
+  for (let k = 0; k < 3; k++) ctx.fillText(name, 268, 166);
   ctx.shadowBlur = 0;
   ctx.fillStyle = "#f2f0ec";
-  ctx.fillText("smoothyfiles", 268, 166);
+  ctx.fillText(name, 268, 166);
   ctx.restore();
   return out.toDataURL("image/png");
 }

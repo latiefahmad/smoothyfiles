@@ -87,13 +87,14 @@ pub enum AnimPref {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum BackdropPref {
-    /// Default, like Explorer: a quiet desktop tint.
+    /// Default: a plain opaque colour, no desktop tint.
     #[default]
+    Solid,
+    /// Like Explorer: a quiet desktop tint.
     Mica,
     /// Files' default: a more colorful variant of Mica.
     MicaAlt,
     Acrylic,
-    Solid,
 }
 
 /// Hızlı Bakış penceresinin arka planı.
@@ -439,7 +440,7 @@ impl Default for Settings {
             smooth_scroll: true,
             show_scrollbar: true,
             animations: AnimPref::System,
-            backdrop: BackdropPref::Mica,
+            backdrop: BackdropPref::Solid,
             tint: None,
             background_image: None,
             background_opacity: 0.2,

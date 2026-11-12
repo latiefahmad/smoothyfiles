@@ -35,6 +35,7 @@ def main():
     ap.add_argument("--font", required=True)
     ap.add_argument("--out", default=os.path.join(ROOT, "crates", "rf-app", "assets", "splash.gif"))
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--ffmpeg", default="ffmpeg", help="path to the ffmpeg executable")
     a = ap.parse_args()
 
     work = tempfile.mkdtemp(prefix="rf-splash-")
@@ -73,9 +74,9 @@ def main():
 
     seq = os.path.join(still, "f%03d.png")
     pal = os.path.join(work, "palette.png")
-    subprocess.check_call(["ffmpeg", "-v", "error", "-y", "-framerate", str(RENDER_FPS), "-i", seq, "-vf", "palettegen=max_colors=128:stats_mode=full", pal])
+    subprocess.check_call([a.ffmpeg, "-v", "error", "-y", "-framerate", str(RENDER_FPS), "-i", seq, "-vf", "palettegen=max_colors=128:stats_mode=full", pal])
     subprocess.check_call([
-        "ffmpeg", "-v", "error", "-y", "-framerate", str(RENDER_FPS), "-i", seq, "-i", pal,
+        a.ffmpeg, "-v", "error", "-y", "-framerate", str(RENDER_FPS), "-i", seq, "-i", pal,
         "-lavfi", f"fps={OUT_FPS}[a];[a][1:v]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle", "-loop", "0", a.out,
     ])
     print(a.out, os.path.getsize(a.out), "bytes,", len(ims), "frames rendered")
