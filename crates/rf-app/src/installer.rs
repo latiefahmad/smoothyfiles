@@ -26,6 +26,21 @@ pub fn startup() {
         .run();
 }
 
+/// Leaves the program folder (Velopack's `current`) as the working directory: a process —
+/// or one it starts, which inherits the directory — standing there keeps Windows from renaming
+/// the folder, and the updater renames it. "Restart and update" then brought the same version
+/// back. Called at the start of the file manager and of DirectLook.
+pub fn leave_install_dir() {
+    let (Ok(cwd), Ok(exe)) = (std::env::current_dir(), std::env::current_exe()) else { return };
+    if exe.parent().map_or(true, |dir| !cwd.starts_with(dir)) {
+        return;
+    }
+    let to = dirs::home_dir().or_else(dirs::data_dir).unwrap_or_else(std::env::temp_dir);
+    if let Err(e) = std::env::set_current_dir(to) {
+        log::warn!("leave install folder: {e}");
+    }
+}
+
 /// Registrations that are on follow this install: the default file manager, DirectLook's start
 /// with Windows, and the Open/Save dialog DLL (a per-build copy).
 fn after_install_or_update() {

@@ -568,12 +568,19 @@ impl FolderView {
         };
         let old = self.entry(ei).name.to_string();
         self.set_renaming(None, None);
-        // Explorer's rule, said up front instead of a shell error after the fact
+        // Explorer's rule, said up front instead of a shell error after the fact — in the app's
+        // own dialog, not a Windows message box that opens behind the window
         const INVALID: &[char] = &['\\', '/', ':', '*', '?', '"', '<', '>', '|'];
         if new_name.contains(INVALID) || new_name.ends_with('.') {
-            let title = crate::t!("Yeniden adlandır").to_string();
             let msg = format!("{}\n\n{}", new_name, crate::t!("Dosya adı şu karakterleri içeremez: \\ / : * ? \" < > | ve nokta ile bitemez."));
-            rf_win::sta::run(move |owner| rf_win::shell::alert(owner, &title, &msg));
+            crate::prompt::show(
+                crate::t!("Yeniden adlandır"),
+                Some(msg),
+                None,
+                vec![crate::prompt::Button::new(crate::t!("Tamam"), crate::prompt::Kind::Primary, |_, _, _| Ok(()))],
+                window,
+                cx,
+            );
             window.focus(&self.focus, cx);
             cx.notify();
             return;
@@ -595,19 +602,33 @@ impl FolderView {
                 let from = dir.join(&old);
                 let to = dir.join(&new_name);
                 self.set_reselect(new_name.clone());
-                // Explorer-style warning when a file's extension changes.
+                // Explorer-style warning when a file's extension changes — the app's own dialog,
+                // not a Windows message box that opens behind the window. Escape or Cancel
+                // drops the channel: the rename is off.
                 let ext = |n: &str| std::path::Path::new(n).extension().map(|e| e.to_string_lossy().to_lowercase());
                 let warn = cx.global::<crate::settings::Settings>().warn_extension_change;
                 let confirm_rx = (warn && !self.entry(ei).is_dir() && ext(&old).is_some() && ext(&old) != ext(&new_name)).then(|| {
                     let (t, r) = oneshot::channel::<bool>();
-                    let title = crate::t!("Dosya adı uzantısı").to_string();
-                    let msg = crate::t!("Dosya adı uzantısını değiştirirseniz dosya kullanılamaz hale gelebilir. Değiştirmek istediğinizden emin misiniz?").to_string();
-                    rf_win::sta::run(move |owner| {
-                        let _ = t.send(rf_win::shell::confirm(owner, &title, &msg));
-                    });
+                    // the button handler is an Fn, not FnOnce: the sender is taken once
+                    let send = std::cell::Cell::new(Some(t));
+                    crate::prompt::show(
+                        crate::t!("Dosya adı uzantısı"),
+                        Some(crate::t!("Dosya adı uzantısını değiştirirseniz dosya kullanılamaz hale gelebilir. Değiştirmek istediğinizden emin misiniz?").to_string()),
+                        None,
+                        vec![
+                            crate::prompt::Button::new(crate::t!("Yeniden adlandır"), crate::prompt::Kind::Primary, move |_, _, _| {
+                                let _ = send.take().and_then(|t| t.send(true).ok());
+                                Ok(())
+                            }),
+                            crate::prompt::Button::cancel(),
+                        ],
+                        window,
+                        cx,
+                    );
                     r
                 });
                 let (f2, n2) = (from.clone(), new_name.clone());
+                let window_handle = window.window_handle();
                 cx.spawn(async move |this, cx| {
                     if let Some(r) = confirm_rx {
                         if !r.await.unwrap_or(false) {
@@ -616,7 +637,8 @@ impl FolderView {
                         }
                     }
                     // Another item already has that name (a case-only change is fine): say so
-                    // plainly instead of the shell's "parameter is incorrect".
+                    // plainly in the app's own dialog instead of the shell's "parameter is
+                    // incorrect", or a message box that opens behind the window.
                     let (src, dst) = (f2.clone(), f2.with_file_name(&n2));
                     let clash = cx
                         .background_spawn(async move {
@@ -625,9 +647,16 @@ impl FolderView {
                         })
                         .await;
                     if clash {
-                        let title = crate::t!("Yeniden adlandır").to_string();
-                        let msg = format!("{}\n\n{}", n2, crate::t!("Bu adda bir öğe zaten var. Başka bir ad deneyin."));
-                        rf_win::sta::run(move |owner| rf_win::shell::alert(owner, &title, &msg));
+                        let _ = window_handle.update(cx, |_, window, cx| {
+                            crate::prompt::show(
+                                crate::t!("Yeniden adlandır"),
+                                Some(format!("{}\n\n{}", n2, crate::t!("Bu adda bir öğe zaten var. Başka bir ad deneyin."))),
+                                None,
+                                vec![crate::prompt::Button::new(crate::t!("Tamam"), crate::prompt::Kind::Primary, |_, _, _| Ok(()))],
+                                window,
+                                cx,
+                            );
+                        });
                         let _ = this.update(cx, |v, _| v.clear_reselect());
                         return;
                     }

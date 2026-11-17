@@ -171,8 +171,12 @@ impl DialogView {
         }
     }
 
+    /// The button Enter presses: the first Primary; a dialog without one (the red Delete of a
+    /// permanent-delete question) takes Enter on its destructive button, as Windows' own
+    /// questions do — before, Enter did nothing there.
     fn press_primary(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(ix) = self.buttons.iter().position(|b| b.kind == Kind::Primary) {
+        let kind = if self.buttons.iter().any(|b| b.kind == Kind::Primary) { Kind::Primary } else { Kind::Danger };
+        if let Some(ix) = self.buttons.iter().position(|b| b.kind == kind) {
             self.press(ix, window, cx);
         }
     }

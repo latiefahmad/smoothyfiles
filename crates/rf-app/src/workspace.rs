@@ -171,12 +171,25 @@ pub struct Workspace {
 pub struct OpenWorkspaces(Vec<(AnyWindowHandle, WeakEntity<Workspace>)>);
 impl Global for OpenWorkspaces {}
 
+/// One jump list rewrite, queued to the writer thread below.
+struct JumpWrite {
+    exe: std::path::PathBuf,
+    tasks: [(&'static str, &'static str); 2],
+    category: &'static str,
+    pins: Vec<(String, PathBuf)>,
+}
+
 /// A second launch forwarded its argument: open it as a tab in the most recent live window
 /// and bring that window up; with no window left, open a new one.
 /// Taskbar jump list: "New window" / "New tab" and the pinned folders. Rewritten only when the
 /// pins or the language change; test runs (several instances) leave the user's list alone.
+/// Writes take turns on one thread, and a run of changes is written once (only the newest
+/// request is kept): the shell refuses concurrent rewrites of its backing store, and a run of
+/// rapid changes then failed with "unable to remove the file to be replaced", leaving a stale
+/// list.
 fn update_jump_list(places: &crate::places::Places) {
     static LAST: std::sync::Mutex<Option<(Vec<(String, PathBuf)>, [&'static str; 3])>> = std::sync::Mutex::new(None);
+    static WRITE: std::sync::Mutex<Option<std::sync::mpsc::Sender<JumpWrite>>> = std::sync::Mutex::new(None);
     if !places.loaded || std::env::var_os("SMOOTHYFILES_MULTI_INSTANCE").is_some() {
         return;
     }
@@ -191,12 +204,32 @@ fn update_jump_list(places: &crate::places::Places) {
         *last = Some((pins.clone(), labels));
     }
     let Ok(exe) = std::env::current_exe() else { return };
-    std::thread::spawn(move || {
-        let tasks = [(labels[0], rf_win::jumplist::NEW_WINDOW_ARG), (labels[1], "")];
-        if let Err(e) = rf_win::jumplist::set(&exe, &tasks, labels[2], &pins) {
-            log::warn!("jump list: {e:#}");
-        }
-    });
+    let job = JumpWrite {
+        exe,
+        tasks: [(labels[0], rf_win::jumplist::NEW_WINDOW_ARG), (labels[1], "")],
+        category: labels[2],
+        pins,
+    };
+    let tx = WRITE.lock().unwrap().get_or_insert_with(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<JumpWrite>();
+        std::thread::Builder::new()
+            .name("jump-list".into())
+            .spawn(move || {
+                while let Ok(mut job) = rx.recv() {
+                    // a run of changes is written once: drop everything but the newest
+                    while let Ok(newer) = rx.try_recv() {
+                        job = newer;
+                    }
+                    if let Err(e) = rf_win::jumplist::set(&job.exe, &job.tasks, job.category, &job.pins) {
+                        log::warn!("jump list: {e:#}");
+                    }
+                }
+            })
+            .ok();
+        tx
+    })
+    .clone();
+    let _ = tx.send(job);
 }
 
 /// Whether `path` lives on drive `letter` (`E:\…`, `\\?\E:\…`).
@@ -3305,13 +3338,15 @@ impl Render for Workspace {
             .bg(p.window_bg)
             .text_color(p.text)
             .on_action(cx.listener(|this, _: &GoBack, _, cx| this.with_tab(cx, |v, cx| v.back(cx))))
-            // Windows' own dialogs (credentials, reconnect at sign-in); the drive list notices
-            // the new / removed drive by itself
-            .on_action(cx.listener(|_, _: &MapNetworkDrive, window, _| {
-                rf_win::network::map_drive_dialog(Self::hwnd(window).unwrap_or(0))
+            // Windows' own dialogs (credentials, reconnect at sign-in) open on the shell STA
+            // thread, as the other Windows dialogs do: a modal dialog must not own the UI
+            // thread, or the app can be taken down with it. The drive list notices the new /
+            // removed drive by itself.
+            .on_action(cx.listener(|_, _: &MapNetworkDrive, _, _| {
+                rf_win::sta::run(|owner| rf_win::network::map_drive_dialog(owner.0 as isize))
             }))
-            .on_action(cx.listener(|_, _: &DisconnectNetworkDrive, window, _| {
-                rf_win::network::disconnect_drive_dialog(Self::hwnd(window).unwrap_or(0))
+            .on_action(cx.listener(|_, _: &DisconnectNetworkDrive, _, _| {
+                rf_win::sta::run(|owner| rf_win::network::disconnect_drive_dialog(owner.0 as isize))
             }))
             .on_action(cx.listener(|this, _: &GoForward, _, cx| this.with_tab(cx, |v, cx| v.forward(cx))))
             .on_action(cx.listener(|this, _: &GoUp, _, cx| this.with_tab(cx, |v, cx| v.up(cx))))

@@ -268,6 +268,10 @@ pub fn main() {
         .format_timestamp_millis()
         .init();
     start_mark("logging");
+    // Leave the program folder as the working directory: the updater renames it, and a process
+    // standing in it (and every program started from here, which inherits it) keeps Windows
+    // from renaming — "Restart and update" then brought the same version back.
+    installer::leave_install_dir();
 
     // As default file manager we also receive shell namespaces (Control Panel = "::{…}") and
     // non-folders: hand those back to Explorer so nothing becomes unreachable.

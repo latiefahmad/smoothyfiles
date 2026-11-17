@@ -96,6 +96,8 @@ pub fn main() {
     rf_win::shell::suppress_critical_error_dialogs();
     rf_win::thumbs::keep_gdiplus_alive();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).target(env_logger::Target::Stderr).init();
+    // same as the file manager: nothing of ours stands in the program folder the updater renames
+    crate::installer::leave_install_dir();
     crate::background::DIRECTLOOK_PROCESS.store(true, std::sync::atomic::Ordering::Relaxed);
 
     let raw: Vec<String> = std::env::args().skip(1).collect();
