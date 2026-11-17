@@ -159,6 +159,8 @@ pub struct MenuPrefs {
     pub tags: bool,
     pub shelf: bool,
     pub terminal: bool,
+    /// "Edit in Notepad" for a single file.
+    pub notepad: bool,
     /// Shell extensions under "Show more options" (off = listed at the bottom of the menu).
     pub shell_submenu: bool,
 }
@@ -175,6 +177,7 @@ impl Default for MenuPrefs {
             tags: true,
             shelf: true,
             terminal: true,
+            notepad: true,
             shell_submenu: true,
         }
     }
@@ -377,8 +380,11 @@ pub struct Settings {
 
     // ---- Developer tools
     pub ide_button: IdePref,
-    /// Editor to open folders with ("code" when empty and VS Code is installed).
+    /// Editor to open folders with: an explicit exe path (`ide_path`), else the picked editor's
+    /// id (`editor_id`), else automatic — the first editor found (VS Code first).
     pub ide_path: String,
+    /// The editor picked in Settings ("vscode", "notepadpp", …); empty = automatic.
+    pub editor_id: String,
 
     // ---- Advanced
     pub show_flatten: bool,
@@ -478,6 +484,7 @@ impl Default for Settings {
             index_excluded: Vec::new(),
             ide_button: IdePref::GitRepos,
             ide_path: String::new(),
+            editor_id: String::new(),
             show_flatten: false,
             directlook_enabled: true,
             quick_search: true,

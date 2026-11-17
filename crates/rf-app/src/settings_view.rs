@@ -481,7 +481,7 @@ fn general(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         None,
         move || {
             type Set = fn(&mut Settings, bool);
-            let rows: [(&str, bool, Set); 9] = [
+            let rows: [(&str, bool, Set); 10] = [
                 (t!("Yeni sekmede aç"), m.open_in_new_tab, |s, v| s.menu.open_in_new_tab = v),
                 (t!("Yeni pencerede aç"), m.open_in_new_window, |s, v| s.menu.open_in_new_window = v),
                 (t!("Öğe yolunu kopyala"), m.copy_path, |s, v| s.menu.copy_path = v),
@@ -491,6 +491,7 @@ fn general(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
                 (t!("Etiketler"), m.tags, |s, v| s.menu.tags = v),
                 (t!("Rafa ekle"), m.shelf, |s, v| s.menu.shelf = v),
                 (t!("Terminalde aç"), m.terminal, |s, v| s.menu.terminal = v),
+                (t!("Notepad'te düzenle"), m.notepad, |s, v| s.menu.notepad = v),
             ];
             rows.into_iter()
                 .enumerate()
@@ -1251,7 +1252,17 @@ fn tag_name_dialog(existing: Option<(u32, String)>, window: &mut Window, cx: &mu
 }
 
 fn dev(p: &Palette, s: &Settings) -> Vec<AnyElement> {
-    let ide_label = if s.ide_path.is_empty() { t!("VS Code (otomatik)").to_string() } else { s.ide_path.clone() };
+    // the editors found on this PC (detection runs once at startup, in the background)
+    let editors = rf_win::editors::cached();
+    let picked = if !s.ide_path.is_empty() {
+        s.ide_path.clone()
+    } else {
+        editors
+            .iter()
+            .find(|e| e.id == s.editor_id)
+            .or_else(|| editors.first())
+            .map_or_else(|| t!("VS Code (otomatik)").to_string(), |e| e.name.to_string())
+    };
     vec![
         card(
             p,
@@ -1274,11 +1285,21 @@ fn dev(p: &Palette, s: &Settings) -> Vec<AnyElement> {
             p,
             L::SquareTerminal,
             t!("Düzenleyici"),
-            Some(&ide_label),
+            Some(&picked),
             h_flex()
                 .gap_2()
+                .flex_wrap()
+                .children(editors.iter().enumerate().map(|(i, e)| {
+                    let id = e.id;
+                    button(("ide-ed", i), p, e.name, move |_, cx| {
+                        settings::update(cx, |s| {
+                            s.editor_id = id.to_string();
+                            s.ide_path.clear();
+                        })
+                    })
+                }))
                 .child(button("ide-browse", p, t!("Gözat"), |window, cx| pick_into(window, cx, t!("Düzenleyici seç"), PickTarget::Ide)))
-                .child(button("ide-reset", p, t!("Otomatik"), |_, cx| settings::update(cx, |s| s.ide_path.clear())))
+                .child(button("ide-reset", p, t!("Otomatik"), |_, cx| settings::update(cx, |s| { s.editor_id.clear(); s.ide_path.clear(); })))
                 .into_any_element(),
         ),
     ]

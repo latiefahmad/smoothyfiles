@@ -272,6 +272,9 @@ pub fn main() {
     // standing in it (and every program started from here, which inherits it) keeps Windows
     // from renaming — "Restart and update" then brought the same version back.
     installer::leave_install_dir();
+    // the installed editors, for "Open in editor" and its Settings page: found once, in the
+    // background, so the settings page and the button never wait on the disk or the registry
+    rf_win::editors::warm();
 
     // As default file manager we also receive shell namespaces (Control Panel = "::{…}") and
     // non-folders: hand those back to Explorer so nothing becomes unreachable.

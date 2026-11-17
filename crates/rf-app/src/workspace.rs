@@ -2694,6 +2694,7 @@ impl Workspace {
             };
             let dir = tab.location().path().map(Path::to_path_buf);
             let ide = prefs.ide_path.clone();
+            let editor_id = prefs.editor_id.clone();
             (show && dir.is_some()).then(|| {
                 let dir = dir.unwrap();
                 h_flex()
@@ -2707,7 +2708,7 @@ impl Workspace {
                     .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(t!("Klasörü düzenleyicide aç")).build(w, cx))
                     .child(Icon::new(L::Code).size(px(12.)))
                     .child(t!("Aç"))
-                    .on_click(move |_, _, _| open_in_ide(dir.clone(), ide.clone()))
+                    .on_click(move |_, _, _| open_in_ide(dir.clone(), ide.clone(), editor_id.clone()))
             })
         };
         let mut left = h_flex().gap_3();
@@ -2873,20 +2874,33 @@ fn tooltip_text(id: &str) -> &'static str {
     }
 }
 
-/// Drop onto a sidebar entry / breadcrumb segment: Explorer rules (same volume = move).
-/// Opens `dir` in the user's editor (`ide` path, else VS Code's `code` launcher).
-pub fn open_in_ide(dir: PathBuf, ide: String) {
+/// Opens `dir` in the user's editor: an explicit exe path (Settings › Developer tools › Browse)
+/// wins, then the editor picked there, then the first editor found on this PC (VS Code first),
+/// and VS Code's `code` launcher as a last resort. The editor is resolved and started on this
+/// worker thread: detection reads the disk and the registry.
+pub fn open_in_ide(dir: PathBuf, ide_path: String, editor_id: String) {
     std::thread::spawn(move || {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let r = if ide.is_empty() {
-            // `code` is a .cmd launcher: run it through cmd without a console window
-            std::process::Command::new("cmd").args(["/c", "code", "."]).current_dir(&dir).creation_flags(CREATE_NO_WINDOW).spawn()
-        } else {
-            std::process::Command::new(&ide).arg(&dir).spawn()
+        let fail = |e: std::io::Error| log::warn!("open in editor: {e}");
+        if !ide_path.is_empty() {
+            // an explicit exe the user browsed to
+            let _ = std::process::Command::new(&ide_path).arg(&dir).spawn().map_err(fail);
+            return;
+        }
+        let editors = rf_win::editors::detect();
+        let picked = editors
+            .iter()
+            .find(|e| e.id == editor_id)
+            .or_else(|| editors.first())
+            .map(|e| (e.exe.clone(), e.name));
+        let Some((exe, name)) = picked else {
+            // nothing found: VS Code's launcher, as before editors were detected
+            let _ = std::process::Command::new("cmd").args(["/c", "code", "."]).current_dir(&dir).creation_flags(CREATE_NO_WINDOW).spawn().map_err(fail);
+            return;
         };
-        if let Err(e) = r {
-            log::warn!("open in editor: {e}");
+        if let Err(e) = std::process::Command::new(&exe).arg(&dir).spawn() {
+            log::warn!("open in editor ({name}): {e}");
         }
     });
 }
@@ -3395,8 +3409,9 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &OpenInIde, _, cx| {
                 if let Some(dir) = this.active_tab().read(cx).location().path().map(Path::to_path_buf) {
-                    let ide = cx.global::<crate::settings::Settings>().ide_path.clone();
-                    open_in_ide(dir, ide);
+                    let s = cx.global::<crate::settings::Settings>();
+                    let (ide, editor_id) = (s.ide_path.clone(), s.editor_id.clone());
+                    open_in_ide(dir, ide, editor_id);
                 }
             }))
             .on_action(cx.listener(|_, _: &ToggleToolbar, _, cx| {

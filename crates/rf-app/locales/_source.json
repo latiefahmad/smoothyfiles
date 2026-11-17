@@ -5838,5 +5838,11 @@
   "key": "uygulama zaten çalışıyordu (sıfırdan açılış değil)",
   "tr": "uygulama zaten çalışıyordu (sıfırdan açılış değil)",
   "en": "the app was already running (not a start from scratch)"
+ },
+ {
+  "id": "7836f373",
+  "key": "Notepad'te düzenle",
+  "tr": "Notepad'te düzenle",
+  "en": "Edit in Notepad"
  }
 ]

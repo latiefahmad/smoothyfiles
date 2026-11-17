@@ -183,6 +183,13 @@ impl FolderView {
         if has_files {
             v.push(Item::Sub { label: t!("Şununla aç").into(), icon: icon(L::LayoutGrid), items: Sub::Pending { key: "openwith", fallback: None } });
         }
+        // exactly one file (a folder is `single_dir` above): Windows' own Notepad
+        if items.len() == 1 && !single_dir && mp.notepad
+            && crate::archive_view::split(&items[0]).is_none() && !rf_win::ftp::is_ftp(&items[0])
+        {
+            let f = items[0].clone();
+            v.push(Item::action(t!("Notepad'te düzenle"), icon(L::FileText), move |_, _| edit_with_notepad(f.clone())));
+        }
         if self.is_search() && items.len() == 1 {
             let p = items[0].clone();
             v.push(Item::action(t!("Dosya konumunu aç"), icon(L::FolderOpen), act(me, move |v, _, cx| {
@@ -747,6 +754,16 @@ fn archive_password(dest: PathBuf, finish: Finish, first: Option<String>, window
 fn open_terminal(d: PathBuf) {
     std::thread::spawn(move || {
         let _ = rf_win::shell::open_terminal(&d);
+    });
+}
+
+/// Notepad for one file, off the UI thread (it starts in a moment; nothing waits on it).
+fn edit_with_notepad(f: PathBuf) {
+    std::thread::spawn(move || {
+        let r = std::process::Command::new(rf_win::editors::notepad()).arg(&f).spawn();
+        if let Err(e) = r {
+            log::warn!("edit in notepad: {e}");
+        }
     });
 }
 

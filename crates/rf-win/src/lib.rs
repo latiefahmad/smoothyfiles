@@ -18,6 +18,7 @@ pub mod diskusage;
 pub mod elf;
 pub mod dnd;
 pub mod drives;
+pub mod editors;
 pub mod encoding;
 pub mod fastcopy;
 pub mod fastdelete;
