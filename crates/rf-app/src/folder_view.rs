@@ -4018,9 +4018,13 @@ impl Render for FolderView {
         };
         // Ctrl and the mouse wheel change the item size (as in Explorer): a capture-phase
         // listener answers the wheel before the lists scroll at all, inside the pane's bounds.
+        // The canvas is an absolute overlay: in the block flow it would push the whole listing
+        // one pane down (regression 1.2.0–1.2.1). The handler is registered in the paint
+        // closure — that is the only phase that allows it.
         let view = cx.entity().downgrade();
         let content = div().size_full().relative().child(canvas(
-            move |bounds, window, _| {
+            move |_, _, _| {},
+            move |bounds, _, window, _| {
                 window.on_mouse_event(move |e: &ScrollEvent, phase, _window, cx| {
                     if phase == DispatchPhase::Capture
                         && e.modifiers.control
@@ -4034,8 +4038,7 @@ impl Render for FolderView {
                     }
                 });
             },
-            move |_, _, _, _| {},
-        ).size_full()).child(content);
+        ).absolute().inset_0()).child(content);
         div()
             .id("folder-view")
             .key_context(FOLDER_CTX)
