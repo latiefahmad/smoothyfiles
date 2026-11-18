@@ -605,12 +605,13 @@ impl FolderView {
         if self.column_cache.len() > 48 {
             self.column_cache.clear();
         }
-        let show_hidden = self.filter.show_hidden;
+        let filter = self.filter.clone();
         let d2 = dir.clone();
         let work = cx.background_spawn(async move {
             let mut v = Vec::new();
             let _ = rf_win::list_dir(&d2, 4096, &|| false, &mut |b| v.extend(b));
-            v.retain(|e| show_hidden || !e.is_hidden());
+            // the side columns hide what the other layouts hide (hidden, system and dot files)
+            v.retain(|e| filter.accepts(e));
             let spec = SortSpec::default();
             v.sort_by(|a, b| spec.compare(a, b));
             v
@@ -649,10 +650,14 @@ impl FolderView {
                     .relative()
                     .when(selected, |d| d.bg(p.selection).child(theme::selection_pill(&p)))
                     .when(!selected, |d| d.hover(|s| s.bg(p.hover)))
-                    .child(match &shell_icon {
-                        Some(im) => img(im.clone()).size(px(16.)).flex_shrink_0().into_any_element(),
-                        None => Icon::new(icons::icon_for(cat)).size(px(16.)).text_color(theme::kind_color(cat, p.dark)).into_any_element(),
-                    })
+                    .child(Self::link_arrow(
+                        match &shell_icon {
+                            Some(im) => img(im.clone()).size(px(16.)).into_any_element(),
+                            None => Icon::new(icons::icon_for(cat)).size(px(16.)).text_color(theme::kind_color(cat, p.dark)).into_any_element(),
+                        },
+                        e.is_symlink() && !e.is_cloud_placeholder(),
+                        &p,
+                    ))
                     .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, _| this.name_hit = true)).child(SharedString::from(e.name.to_string())))
                     .when(is_dir, |d| d.child(Icon::new(L::ChevronRight).size(px(12.)).text_color(p.text_tertiary)))
                     .on_mouse_down(
@@ -667,6 +672,25 @@ impl FolderView {
             );
         }
         out
+    }
+
+    /// A symbolic link or junction carries Explorer's little arrow on whatever icon it shows.
+    fn link_arrow(icon: AnyElement, is_link: bool, p: &Palette) -> AnyElement {
+        if !is_link {
+            return icon;
+        }
+        div()
+            .relative()
+            .flex_shrink_0()
+            .child(icon)
+            .child(
+                div()
+                    .absolute()
+                    .top(px(-1.))
+                    .right(px(-4.))
+                    .child(Icon::new(L::ArrowUpRight).size(px(9.)).text_color(p.text_secondary)),
+            )
+            .into_any_element()
     }
 
     fn render_columns(&mut self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
@@ -1342,6 +1366,11 @@ impl FolderView {
         if done {
             self.resort_for_sizes(cx);
             self.apply_reselect(cx);
+            // Columns view: an opened folder starts with its first item selected (as in Finder)
+            if self.view_mode == ViewMode::Columns && self.cursor.is_none() && self.selected.is_empty() && !self.visible.is_empty() {
+                self.cursor = Some(0);
+                self.selected.insert(self.visible[0]);
+            }
         }
         cx.notify();
     }
@@ -1926,17 +1955,21 @@ impl FolderView {
                     self.images.update(cx, |c, cx| if thumbs_on { c.thumbnail(&d, e, thumb_px, cx) } else { c.icon(&d, e, cx) })
                 });
                 let is_thumb = icons::has_thumbnail(e);
-                let visual: AnyElement = match thumb {
-                    Some(im) => img(im)
-                        .size(visual_px)
-                        .object_fit(ObjectFit::Contain)
-                        .when(is_thumb, |i| i.rounded(px(4.)))
-                        .into_any_element(),
-                    None => Icon::new(icons::icon_for(cat))
-                        .size(visual_px * 0.6)
-                        .text_color(theme::kind_color(cat, p.dark))
-                        .into_any_element(),
-                };
+                let visual: AnyElement = Self::link_arrow(
+                    match thumb {
+                        Some(im) => img(im)
+                            .size(visual_px)
+                            .object_fit(ObjectFit::Contain)
+                            .when(is_thumb, |i| i.rounded(px(4.)))
+                            .into_any_element(),
+                        None => Icon::new(icons::icon_for(cat))
+                            .size(visual_px * 0.6)
+                            .text_color(theme::kind_color(cat, p.dark))
+                            .into_any_element(),
+                    },
+                    e.is_symlink() && !e.is_cloud_placeholder(),
+                    &p,
+                );
                 let rename_input = self.renaming.as_ref().filter(|(i, _)| *i == ei).map(|(_, inp)| inp.clone());
                 let label: AnyElement = match rename_input {
                     // the text stays where the label was: centered, the label's size
@@ -3178,14 +3211,17 @@ impl FolderView {
                                     ),
                             )
                         })
-                        .child(match &shell_icon {
-                            Some(im) => img(im.clone()).size(px(16.)).flex_shrink_0().into_any_element(),
-                            None => Icon::new(icons::icon_for(cat))
-                                .size(px(16.))
-                                .flex_shrink_0()
-                                .text_color(theme::kind_color(cat, p.dark))
-                                .into_any_element(),
-                        })
+                        .child(Self::link_arrow(
+                            match &shell_icon {
+                                Some(im) => img(im.clone()).size(px(16.)).into_any_element(),
+                                None => Icon::new(icons::icon_for(cat))
+                                    .size(px(16.))
+                                    .text_color(theme::kind_color(cat, p.dark))
+                                    .into_any_element(),
+                            },
+                            e.is_symlink() && !e.is_cloud_placeholder(),
+                            &p,
+                        ))
                         .child(name_el)
                         // encrypted: an archive member that needs a password, or an EFS file
                         .children((e.attrs & rf_core::attrs::ENCRYPTED != 0).then(|| Icon::new(L::Lock).size(px(12.)).flex_shrink_0().text_color(p.text_secondary)))

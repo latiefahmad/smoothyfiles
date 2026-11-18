@@ -15,8 +15,8 @@ use windows::Win32::System::SystemServices::{SFGAO_FILESYSTEM, SFGAO_FLAGS, SFGA
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
     BHID_EnumItems, IEnumShellItems, IShellItem, IShellItem2, SEE_MASK_FLAG_NO_UI, SEE_MASK_IDLIST, SEE_MASK_NOASYNC,
-    SHCreateItemFromParsingName, SHELLEXECUTEINFOW, SHParseDisplayName,
-    ShellExecuteExW, SIGDN, SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY,
+    SHCreateItemFromParsingName, SHELLEXECUTEINFOW, SHParseDisplayName, ShellExecuteExW, SIGDN,
+    SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, SIGDN_PARENTRELATIVEPARSING,
 };
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{Interface, PCWSTR};
@@ -72,7 +72,45 @@ fn filetime_ms(ft: FILETIME) -> i64 {
 fn bind(parsing: &str) -> anyhow::Result<IShellItem> {
     ensure_com();
     let w = wide(parsing.trim());
-    Ok(unsafe { SHCreateItemFromParsingName(PCWSTR(w.as_ptr()), None)? })
+    match unsafe { SHCreateItemFromParsingName(PCWSTR(w.as_ptr()), None) } {
+        Ok(item) => Ok(item),
+        // A phone's storage often cannot be opened by its address ("The parameter is
+        // incorrect"): the phone above it lists fine, so the folder is looked up there,
+        // matched by the address's last segment or the item's own parsing name (#49).
+        Err(e) => bind_through_parent(parsing.trim()).ok_or_else(|| e.into()),
+    }
+}
+
+/// Finds a child of `parsing`'s parent whose identity matches the parent's last segment.
+fn bind_through_parent(parsing: &str) -> Option<IShellItem> {
+    let (up_s, leaf) = parsing.rsplit_once('\\')?;
+    if leaf.is_empty() {
+        return None;
+    }
+    let up = bind(up_s).ok()?;
+    let kids: IEnumShellItems = unsafe { up.BindToHandler(None, &BHID_EnumItems) }.ok()?;
+    let mut buf: [Option<IShellItem>; 32] = Default::default();
+    loop {
+        let mut got = 0u32;
+        let _ = unsafe { kids.Next(&mut buf, Some(&mut got)) };
+        for item in buf.iter_mut().take(got as usize).flatten() {
+            if matches_leaf(item, leaf) {
+                return Some(item.clone());
+            }
+        }
+        if got < 32 {
+            break;
+        }
+    }
+    None
+}
+
+fn matches_leaf(item: &IShellItem, leaf: &str) -> bool {
+    let absolute = display(item, SIGDN_DESKTOPABSOLUTEPARSING).unwrap_or_default();
+    if absolute.rsplit('\\').next().is_some_and(|s| s.eq_ignore_ascii_case(leaf)) {
+        return true;
+    }
+    display(item, SIGDN_PARENTRELATIVEPARSING).is_some_and(|p| p.eq_ignore_ascii_case(leaf))
 }
 
 fn child_of(item: &IShellItem) -> Option<ShellChild> {
