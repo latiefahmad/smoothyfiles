@@ -1147,4 +1147,7 @@ pub const EN: &[(&str, &str)] = &[
     ("Bu bilgisayardaki hız testinde smoothyfiles dosyaları Windows'tan {x} kat hızlı kopyaladı.", "In the speed test on this PC, smoothyfiles copied files {x}× faster than Windows."),
     ("Bu bilgisayardaki hız testinde smoothyfiles bir ZIP arşivini Windows'tan {x} kat hızlı çıkardı.", "In the speed test on this PC, smoothyfiles extracted a ZIP archive {x}× faster than Windows."),
     ("Bu bilgisayardaki hız testinde smoothyfiles {entries} öğe arasında adla aramayı {ms} ms'de bitirdi.", "In the speed test on this PC, smoothyfiles searched {entries} items by name in {ms} ms."),
+    ("Dizinde aranıyor…", "Searching the index…"),
+    ("Windows Arama'ya soruluyor…", "Asking Windows Search…"),
+    ("Disk taranıyor…", "Scanning the disk…"),
 ];

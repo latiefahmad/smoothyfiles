@@ -213,6 +213,8 @@ enum Msg {
     View(View),
     /// Search hits: entries plus their parent folders.
     Hits(Vec<Entry>, Vec<Arc<std::path::Path>>),
+    /// Which source the search is on now ("Asking Windows Search…").
+    Status(&'static str),
     /// Shell folder items (a phone, Network…): entries plus what the shell knows about each.
     Shell(Vec<Entry>, Vec<rf_win::shellfolder::ShellChild>),
     /// The shell's own name for the folder being listed.
@@ -303,6 +305,8 @@ pub struct FolderView {
     pub loading: bool,
     pub error: Option<String>,
     pub load_ms: Option<u128>,
+    /// Which source the search is on ("Asking Windows Search…") for the status bar.
+    pub search_step: Option<&'static str>,
     cancel: Arc<AtomicBool>,
     generation: u64,
     /// Bumped on every navigation; a late watcher for an old folder is discarded.
@@ -456,6 +460,7 @@ impl FolderView {
             loading: false,
             error: None,
             load_ms: None,
+            search_step: None,
             cancel: Arc::new(AtomicBool::new(false)),
             generation: 0,
             watch_gen: 0,
@@ -992,6 +997,7 @@ impl FolderView {
                 .and_then(|l| l.default_save.clone().or_else(|| l.folders.first().cloned()))
                 .map(|d| (file.clone(), d));
             self.loading = true;
+            self.search_step = None;
             self.load_started = Instant::now();
             let generation = self.generation;
             let cancel = self.cancel.clone();
@@ -1032,6 +1038,7 @@ impl FolderView {
         }
         if let Location::Shell { parsing, .. } = self.location().clone() {
             self.loading = true;
+            self.search_step = None;
             self.load_started = Instant::now();
             let generation = self.generation;
             let cancel = self.cancel.clone();
@@ -1073,6 +1080,7 @@ impl FolderView {
         if let Location::Tag(id) = self.location().clone() {
             let paths = cx.global::<crate::tags::Tags>().0.paths_with(id);
             self.loading = true;
+            self.search_step = None;
             self.load_started = Instant::now();
             let generation = self.generation;
             let (tx, mut rx) = mpsc::unbounded::<Msg>();
@@ -1115,6 +1123,7 @@ impl FolderView {
         };
         if !soft {
             self.loading = true;
+            self.search_step = None;
             self.load_started = Instant::now();
         }
         let generation = self.generation;
@@ -1190,6 +1199,7 @@ impl FolderView {
                         return;
                     }
                     // 1. our name index (milliseconds) when it covers this folder
+                    let _ = tx.unbounded_send(Msg::Status(t!("Dizinde aranıyor…")));
                     let glob = query.contains(['*', '?']);
                     let mut seen: Option<std::collections::HashSet<String>> = None;
                     let mut found = 0usize;
@@ -1201,33 +1211,81 @@ impl FolderView {
                         seen = Some(paths.iter().map(|p| p.to_string_lossy().to_lowercase()).collect());
                     }
                     // 2. Windows Search (names + contents + AQS) where the folder is indexed: with
-                    //    our index, only what it adds (matches inside files)
-                    if use_index && !glob && rf_win::wsearch::is_indexed(&root) {
-                        let tx2 = tx.clone();
-                        let seen2 = seen.as_ref();
-                        let r = rf_win::wsearch::search(&root, &query, 50_000, &|| cancel.load(Ordering::Relaxed), &mut |hits| {
-                            let mut es = Vec::with_capacity(hits.len());
-                            let mut ps = Vec::with_capacity(hits.len());
-                            for h in hits {
-                                if !include_hidden && h.entry.is_hidden() {
-                                    continue;
+                    //    our index, only what it adds (matches inside files). On its own thread:
+                    //    the service can hang, and the search must answer — a few seconds for its
+                    //    first word, then the disk is searched directly and late answers are
+                    //    dropped (upstream 0.8.9, issue #67)
+                    if use_index && !glob {
+                        enum WsMsg {
+                            Started,
+                            Done(Result<usize, String>),
+                        }
+                        let (wt, wr) = std::sync::mpsc::channel::<WsMsg>();
+                        let wanted = Arc::new(AtomicBool::new(true));
+                        let (root2, query2, cancel2, tx2, seen2, wanted2, wt2) =
+                            (root.clone(), query.clone(), cancel.clone(), tx.clone(), seen.clone(), wanted.clone(), wt.clone());
+                        std::thread::Builder::new()
+                            .name("rf-wsearch".into())
+                            .spawn(move || {
+                                let _ = wt2.send(WsMsg::Started);
+                                if !rf_win::wsearch::is_indexed(&root2) {
+                                    let _ = wt2.send(WsMsg::Done(Err("not in the crawl scope".into())));
+                                    return;
                                 }
-                                if seen2.is_some_and(|s| s.contains(&h.path.to_string_lossy().to_lowercase())) {
-                                    continue;
+                                let mut n = 0usize;
+                                let r = rf_win::wsearch::search(&root2, &query2, 50_000, &|| cancel2.load(Ordering::Relaxed) || !wanted2.load(Ordering::Relaxed), &mut |hits| {
+                                    if !wanted2.load(Ordering::Relaxed) {
+                                        return;
+                                    }
+                                    let mut es = Vec::with_capacity(hits.len());
+                                    let mut ps = Vec::with_capacity(hits.len());
+                                    for h in hits {
+                                        if !include_hidden && h.entry.is_hidden() {
+                                            continue;
+                                        }
+                                        if seen2.as_ref().is_some_and(|s| s.contains(&h.path.to_string_lossy().to_lowercase())) {
+                                            continue;
+                                        }
+                                        n += 1;
+                                        let parent: Arc<std::path::Path> = h.path.parent().unwrap_or(&h.path).into();
+                                        ps.push(parent);
+                                        es.push(h.entry);
+                                    }
+                                    if !es.is_empty() {
+                                        let _ = tx2.unbounded_send(Msg::Hits(es, ps));
+                                    }
+                                });
+                                let _ = wt2.send(WsMsg::Done(r.map(|_| n).map_err(|e| e.to_string())));
+                            })
+                            .ok();
+                        let mut ws_result: Option<Result<usize, String>> = None;
+                        let mut wait = std::time::Duration::from_secs(5);
+                        loop {
+                            match wr.recv_timeout(wait) {
+                                Ok(WsMsg::Started) => {
+                                    let _ = tx.unbounded_send(Msg::Status(t!("Windows Arama'ya soruluyor…")));
+                                    wait = std::time::Duration::from_secs(10);
                                 }
-                                let parent: Arc<std::path::Path> = h.path.parent().unwrap_or(&h.path).into();
-                                ps.push(parent);
-                                es.push(h.entry);
+                                Ok(WsMsg::Done(r)) => {
+                                    ws_result = Some(r);
+                                    break;
+                                }
+                                Err(_) => break, // the wait ran out, or the thread is gone
                             }
-                            let _ = tx2.unbounded_send(Msg::Hits(es, ps));
-                        });
-                        match r {
-                            Ok(n) => {
+                        }
+                        if ws_result.is_none() {
+                            // stops the query within a batch; its late hits go nowhere
+                            wanted.store(false, Ordering::Relaxed);
+                            log::info!("search: Windows Search did not answer in time, searching the disk instead");
+                        }
+                        match ws_result {
+                            Some(Ok(n)) => {
                                 let _ = tx.unbounded_send(Msg::Done(Ok(n + found)));
                                 return;
                             }
-                            Err(e) if seen.is_none() => log::warn!("index search failed, walking instead: {e:#}"),
-                            Err(e) => log::warn!("Windows Search failed: {e:#}"),
+                            Some(Err(e)) if seen.is_none() => log::warn!("index search failed, walking instead: {e:#}"),
+                            Some(Err(e)) => log::warn!("Windows Search failed: {e:#}"),
+                            None => {}
                         }
                     }
                     if seen.is_some() {
@@ -1235,6 +1293,7 @@ impl FolderView {
                         return;
                     }
                     // 3. walking the disk
+                    let _ = tx.unbounded_send(Msg::Status(t!("Disk taranıyor…")));
                     let q = rf_win::search::SearchQuery { root, pattern: query, include_hidden, max_results: 50_000 };
                     let tx2 = tx.clone();
                     let r = rf_win::search::search(&q, &|| cancel.load(Ordering::Relaxed), &mut |hits| {
@@ -1332,9 +1391,11 @@ impl FolderView {
                     self.shell_items.extend(items);
                 }
                 Msg::ShellName(n) => self.shell_title = Some(n),
+                Msg::Status(s) => self.search_step = Some(s),
                 Msg::Done(r) => {
                     done = true;
                     self.loading = false;
+                    self.search_step = None;
                     self.apply_adaptive();
                     self.load_ms = Some(self.load_started.elapsed().as_millis());
                     if trace_live() {
@@ -1421,6 +1482,7 @@ impl FolderView {
                     }
                 }
                 Msg::Hits(..) | Msg::Shell(..) | Msg::ShellName(_) => {}
+                Msg::Status(_) => {}
                 Msg::Done(Err(e)) if e.contains("bulunamadı") => {
                     // The folder we are showing was deleted/renamed away: step up.
                     self.soft_pending = None;

@@ -5868,5 +5868,23 @@
   "key": "Daha fazla",
   "tr": "Daha fazla",
   "en": "More"
+ },
+ {
+  "id": "4362d909",
+  "key": "Dizinde aranıyor…",
+  "tr": "Dizinde aranıyor…",
+  "en": "Searching the index…"
+ },
+ {
+  "id": "9ae8e281",
+  "key": "Windows Arama'ya soruluyor…",
+  "tr": "Windows Arama'ya soruluyor…",
+  "en": "Asking Windows Search…"
+ },
+ {
+  "id": "d9440a71",
+  "key": "Disk taranıyor…",
+  "tr": "Disk taranıyor…",
+  "en": "Scanning the disk…"
  }
 ]

@@ -16,8 +16,33 @@ use std::time::{Duration, Instant};
 
 use notify::{RecursiveMode, Watcher};
 use parking_lot::{Mutex, RwLock};
+use windows::Win32::System::Threading::{
+    GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN, THREAD_MODE_BACKGROUND_END,
+};
 
 use crate::nameindex::Index;
+
+/// Background mode for this thread: its CPU and I/O run below everything else (and its reads
+/// below normal memory), so walking a mechanical disk at first start does not grind the user's
+/// work to a halt (upstream 0.8.9). Restored on drop; a no-op when Windows refuses it.
+struct Background(bool);
+
+impl Background {
+    fn enter() -> Self {
+        // SAFETY: plain Win32 calls on this thread's pseudo-handle
+        let ok = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN) }.is_ok();
+        Background(ok)
+    }
+}
+
+impl Drop for Background {
+    fn drop(&mut self) {
+        if self.0 {
+            // SAFETY: as above; every BEGIN is matched by an END
+            let _ = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_END) };
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -155,6 +180,9 @@ fn save(slot: &Slot) {
 }
 
 fn run(slot: Arc<Slot>, cancel: Arc<AtomicBool>) {
+    // the whole catch-up and walk run quietly: background CPU and I/O priority, restored
+    // before keeping up with changes
+    let background = Background::enter();
     // 1. the saved index, searchable at once
     match Index::load(&slot.file) {
         Ok(ix) if ix.root() == slot.root => {
@@ -173,6 +201,7 @@ fn run(slot: Arc<Slot>, cancel: Arc<AtomicBool>) {
             log::info!("indexer: {} caught up from the change journal in {:.2} s, {n} folders listed again", slot.root.display(), t.elapsed().as_secs_f32());
             slot.changed_since_save.store(true, Ordering::Relaxed);
             save(&slot);
+            drop(background);
             follow(&slot, &cancel);
             return;
         }
@@ -195,6 +224,7 @@ fn run(slot: Arc<Slot>, cancel: Arc<AtomicBool>) {
         slot.changed_since_save.store(true, Ordering::Relaxed);
         save(&slot);
     }
+    drop(background);
     follow(&slot, &cancel);
 }
 

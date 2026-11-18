@@ -2723,7 +2723,10 @@ impl Workspace {
                 };
                 left = left.child(div().text_color(p.text).child(s));
             }
-            if loading {
+            if let Some(step) = tab.search_step {
+                // the search's current source is more telling than "Loading…"
+                left = left.child(div().text_color(p.text_secondary).child(step));
+            } else if loading {
                 left = left.child(t!("Yükleniyor…"));
             }
         }
