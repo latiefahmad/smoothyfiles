@@ -5850,5 +5850,23 @@
   "key": "Siyah (OLED)",
   "tr": "Siyah (OLED)",
   "en": "Black (OLED)"
+ },
+ {
+  "id": "4b9ccf75",
+  "key": "Yinele",
+  "tr": "Yinele",
+  "en": "Redo"
+ },
+ {
+  "id": "95ee9563",
+  "key": "Seçimi kaldır",
+  "tr": "Seçimi kaldır",
+  "en": "Clear selection"
+ },
+ {
+  "id": "9f5921ef",
+  "key": "Daha fazla",
+  "tr": "Daha fazla",
+  "en": "More"
  }
 ]

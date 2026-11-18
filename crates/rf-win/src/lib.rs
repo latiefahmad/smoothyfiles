@@ -10,6 +10,7 @@ pub mod cert;
 pub mod clipboard;
 pub mod complete;
 pub mod ctxmenu;
+pub mod locale;
 pub mod default_fm;
 pub mod design;
 pub mod dialog_reg;

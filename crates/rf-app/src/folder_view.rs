@@ -1906,6 +1906,42 @@ impl FolderView {
         }
     }
 
+    /// Ctrl and the mouse wheel: one size ladder up the details rows and through the grid sizes
+    /// (as in Explorer). Wheel towards you makes the items bigger, away smaller. Columns keep
+    /// their even rows and stay out.
+    fn wheel_zoom(&mut self, grow: bool, cx: &mut Context<Self>) {
+        if self.view_mode == ViewMode::Columns {
+            return;
+        }
+        let rows = ROW_SIZES.len() as i32;
+        let last = rows + GRID_SIZES.len() as i32 - 1;
+        let pos = match self.view_mode {
+            ViewMode::Columns => return,
+            ViewMode::Details => self.row_size as i32,
+            ViewMode::Grid if self.grid_style == GridStyle::Tiles => rows + self.grid_size as i32,
+            // another grid look enters the ladder as its smallest size
+            ViewMode::Grid => rows,
+        };
+        let next = (pos + if grow { 1 } else { -1 }).clamp(0, last);
+        if next == pos {
+            return;
+        }
+        if next < rows {
+            if self.view_mode == ViewMode::Grid {
+                self.set_layout(ViewMode::Details, self.grid_style, cx);
+            }
+            self.row_size = next as u8;
+        } else {
+            if self.view_mode != ViewMode::Grid || self.grid_style != GridStyle::Tiles {
+                self.set_layout(ViewMode::Grid, GridStyle::Tiles, cx);
+            }
+            self.grid_size = (next - rows) as u8;
+        }
+        // a mode change remembers itself; the size lands in the folder's layout too
+        self.remember_layout(cx);
+        cx.notify();
+    }
+
     fn row_step(&self) -> isize {
         if self.view_mode == ViewMode::Grid { self.grid_cols.max(1) as isize } else { 1 }
     }
@@ -2359,6 +2395,23 @@ impl FolderView {
 
     pub fn item_count(&self) -> usize {
         self.visible.len()
+    }
+
+    /// The "…" menu: selection commands the focused list usually owns.
+    pub(crate) fn select_all_items(&mut self, cx: &mut Context<Self>) {
+        self.selected = self.visible.iter().copied().collect();
+        cx.notify();
+    }
+
+    pub(crate) fn clear_selection_items(&mut self, cx: &mut Context<Self>) {
+        self.selected.clear();
+        cx.notify();
+    }
+
+    pub(crate) fn invert_selection_items(&mut self, cx: &mut Context<Self>) {
+        let next: HashSet<u32> = self.visible.iter().copied().filter(|i| !self.selected.contains(i)).collect();
+        self.selected = next;
+        cx.notify();
     }
 
     pub fn selection_summary(&self) -> (usize, u64, bool) {
@@ -3901,6 +3954,26 @@ impl Render for FolderView {
             }
             _ => self.render_details(&p, cx),
         };
+        // Ctrl and the mouse wheel change the item size (as in Explorer): a capture-phase
+        // listener answers the wheel before the lists scroll at all, inside the pane's bounds.
+        let view = cx.entity().downgrade();
+        let content = div().size_full().relative().child(canvas(
+            move |bounds, window, _| {
+                window.on_mouse_event(move |e: &ScrollEvent, phase, _window, cx| {
+                    if phase == DispatchPhase::Capture
+                        && e.modifiers.control
+                        && !e.modifiers.alt
+                        && !e.modifiers.shift
+                        && bounds.contains(&e.position)
+                    {
+                        let grow = e.delta.pixel_delta(px(24.)).y < px(0.);
+                        cx.stop_propagation();
+                        let _ = view.update(cx, |v, cx| v.wheel_zoom(grow, cx));
+                    }
+                });
+            },
+            move |_, _, _, _| {},
+        ).size_full()).child(content);
         div()
             .id("folder-view")
             .key_context(FOLDER_CTX)

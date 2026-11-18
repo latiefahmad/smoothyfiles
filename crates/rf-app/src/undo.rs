@@ -24,6 +24,28 @@ static STACK: Mutex<Vec<UndoOp>> = Mutex::new(Vec::new());
 static REDO: Mutex<Vec<UndoOp>> = Mutex::new(Vec::new());
 const MAX: usize = 50;
 
+/// Short description of what undo / redo would do next ("2 items moved"), for the menus.
+pub fn describe() -> (Option<String>, Option<String>) {
+    let s = STACK.lock();
+    let r = REDO.lock();
+    (peek(s.last()), peek(r.last()))
+}
+
+fn peek(op: Option<&UndoOp>) -> Option<String> {
+    let op = op?;
+    let leaf = |p: &PathBuf| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.to_string_lossy().into_owned());
+    Some(match op {
+        UndoOp::Renamed { to, .. } => format!("{} → {}", crate::i18n::tx("yeniden adlandırma", "rename"), leaf(to)),
+        UndoOp::Created { path } => format!("{} {}", crate::i18n::tx("oluşturuldu", "created"), leaf(path)),
+        UndoOp::Transferred { kind: Transfer::Copy, pairs } =>
+            format!("{} {}", pairs.len(), crate::i18n::tx("öğe kopyalandı", if pairs.len() == 1 { "item copied" } else { "items copied" })),
+        UndoOp::Transferred { kind: Transfer::Move, pairs } =>
+            format!("{} {}", pairs.len(), crate::i18n::tx("öğe taşındı", if pairs.len() == 1 { "item moved" } else { "items moved" })),
+        UndoOp::Recycled { pairs } => format!("{} {}", pairs.len(), crate::i18n::tx("geri dönüşüm kutusundan geri alındı", if pairs.len() == 1 { "item restored" } else { "items restored" })),
+        UndoOp::Flattened { dir, .. } => format!("{} {}", crate::i18n::tx("düzleştirildi", "flattened"), leaf(dir)),
+    })
+}
+
 /// Records a new user operation (a new operation drops whatever could be redone).
 pub fn push(op: UndoOp) {
     REDO.lock().clear();

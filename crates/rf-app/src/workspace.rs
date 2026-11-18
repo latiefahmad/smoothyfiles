@@ -2243,6 +2243,7 @@ impl Workspace {
                 dual: this.tabs[this.active].right.is_some(),
                 shelf: this.shelf_open,
             }))
+            .child(drop("cb-more", L::Ellipsis, None, "Daha fazla", true, cx, |_, _| crate::ctx_menu::BarMenu::More))
             .child(sep())
             .child(
                 div()

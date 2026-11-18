@@ -514,6 +514,8 @@ pub enum BarMenu {
     Sort,
     /// Layout + view toggles; the flags are workspace state shown as check marks.
     View { dual: bool, shelf: bool },
+    /// The "…" overflow: undo/redo, selection, properties, settings.
+    More,
 }
 
 impl FolderView {
@@ -541,6 +543,27 @@ impl FolderView {
                 })
                 .detach();
                 return;
+            }
+            BarMenu::More => {
+                // the menu runs on this folder view ("with_tab"); undo/redo are global
+                let (undo_d, redo_d) = crate::undo::describe();
+                vec![
+                    Item::action(t!("Geri al"), icon(L::Undo), act(&me, |_, _, cx| crate::undo::undo(cx)))
+                        .enabled(undo_d.is_some())
+                        .hint(undo_d.unwrap_or_default()),
+                    Item::action(t!("Yinele"), icon(L::Redo), act(&me, |_, _, cx| crate::undo::redo(cx)))
+                        .enabled(redo_d.is_some())
+                        .hint(redo_d.unwrap_or_default()),
+                    Item::Separator,
+                    Item::action(t!("Tümünü seç"), icon(L::ListChecks), act(&me, |v, _, cx| v.select_all_items(cx))),
+                    Item::action(t!("Seçimi kaldır"), icon(L::ListMinus), act(&me, |v, _, cx| v.clear_selection_items(cx))).enabled(self.selection_summary().0 > 0),
+                    Item::action(t!("Seçimi tersine çevir"), icon(L::CheckCheck), act(&me, |v, _, cx| v.invert_selection_items(cx))),
+                    Item::Separator,
+                    Item::action(t!("Özellikler"), icon(L::Wrench), act(&me, |v, _, cx| v.properties(cx))),
+                    Item::action(t!("Ayarlar"), icon(L::Settings2), act(&me, |_, _, cx| {
+                        crate::open_main_window(Some(rf_core::Location::Settings), None, None, cx);
+                    })),
+                ]
             }
             BarMenu::Sort => {
                 // Files' layout: Sort ▸ / Group ▸, then the folder/file order; these apply to

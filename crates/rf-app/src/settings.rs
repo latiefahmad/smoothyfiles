@@ -612,9 +612,16 @@ impl Settings {
         crate::quick_search::sync(self);
         rf_core::format::set_date_style(match self.date_format {
             DatePref::Application => rf_core::format::DateStyle::Relative,
-            DatePref::System => rf_core::format::DateStyle::Local,
+            DatePref::System => rf_core::format::DateStyle::System,
             DatePref::Universal => rf_core::format::DateStyle::Universal,
         });
+        // Date format › System: the user's Windows short date and time, refreshed on every
+        // settings apply (cheap asks), so a locale change is picked up too
+        if self.date_format == DatePref::System {
+            if let Some((list, full)) = rf_win::locale::short_datetime() {
+                rf_core::format::set_system_format(list, full);
+            }
+        }
         rf_core::format::set_decimal_sizes(self.decimal_sizes);
         SOLID.store(self.backdrop == BackdropPref::Solid, Ordering::Relaxed);
         ANIM.store(self.animations as u8, Ordering::Relaxed);

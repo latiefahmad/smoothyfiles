@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::Mutex;
 
-use chrono::{Local, TimeZone};
+use chrono::{DateTime, Local, TimeZone};
 
 static ENGLISH: AtomicBool = AtomicBool::new(false);
 static DECIMAL: AtomicBool = AtomicBool::new(false);
@@ -15,6 +16,8 @@ pub enum DateStyle {
     Local,
     /// ISO 8601 "2026-11-05 13:45"
     Universal,
+    /// The user's Windows short date and time ("11/17/2026 9:30 AM"), read from the locale.
+    System,
 }
 
 pub fn set_date_style(s: DateStyle) {
@@ -25,8 +28,20 @@ fn date_style() -> DateStyle {
     match DATE_STYLE.load(Ordering::Relaxed) {
         0 => DateStyle::Relative,
         1 => DateStyle::Local,
-        _ => DateStyle::Universal,
+        2 => DateStyle::Universal,
+        _ => DateStyle::System,
     }
+}
+
+/// The Windows short date and time as a chrono format ("%-m/%-d/%Y %-I:%M %p"): the list one
+/// without seconds, the details one with. Before the app sets it (and off Windows) the plain
+/// local form "05.11.2026 13:45" is used.
+static SYSTEM: Mutex<Option<(String, String)>> = Mutex::new(None);
+
+/// The two chrono formats built from the user's Windows locale: for the lists ("M/d/yyyy
+/// h:mm tt") and for the details ("M/d/yyyy h:mm:ss tt").
+pub fn set_system_format(list: String, full: String) {
+    *SYSTEM.lock().unwrap() = (!list.is_empty()).then_some((list, full));
 }
 
 /// Sizes in powers of 1000 instead of 1024 (Settings → Files & folders → Size format).
@@ -74,9 +89,14 @@ pub fn datetime(ms: i64) -> String {
     datetime_with(ms, date_style(), now, ENGLISH.load(Ordering::Relaxed))
 }
 
-/// Always the full local date-time "05.11.2026 03:51" (details, tooltips).
+/// Always the full local date-time "05.11.2026 03:51:07" (details, tooltips), in the user's
+/// Windows format when it is known.
 pub fn datetime_full(ms: i64) -> String {
-    datetime_with(ms, DateStyle::Local, 0, false)
+    if ms <= 0 {
+        return String::new();
+    }
+    let chrono::LocalResult::Single(dt) = Local.timestamp_millis_opt(ms) else { return String::new() };
+    system_format(&dt, true)
 }
 
 fn datetime_with(ms: i64, style: DateStyle, now: i64, en: bool) -> String {
@@ -87,18 +107,30 @@ fn datetime_with(ms: i64, style: DateStyle, now: i64, en: bool) -> String {
     match style {
         DateStyle::Universal => dt.format("%Y-%m-%d %H:%M").to_string(),
         DateStyle::Local => dt.format("%d.%m.%Y %H:%M").to_string(),
+        DateStyle::System => system_format(&dt, false),
         DateStyle::Relative => {
             let secs = (now - ms) / 1000;
             let (n, tr, enu) = match secs {
-                s if s < 0 => return dt.format("%d.%m.%Y %H:%M").to_string(),
+                s if s < 0 => return system_format(&dt, false),
                 s if s < 45 => return (if en { "just now" } else { "az önce" }).to_string(),
                 s if s < 3600 => (((s + 30) / 60).max(1), "dakika önce", "min ago"),
                 s if s < 86_400 => (s / 3600, "saat önce", "h ago"),
                 s if s < 7 * 86_400 => (s / 86_400, "gün önce", "d ago"),
-                _ => return dt.format("%d.%m.%Y %H:%M").to_string(),
+                // a week back and more: the user's short date and time
+                _ => return system_format(&dt, false),
             };
             if en { format!("{n} {enu}") } else { format!("{n} {tr}") }
         }
+    }
+}
+
+/// A date in the user's Windows format (falls back to the plain local one before the app has
+/// read the locale, as in tests and off Windows).
+fn system_format(dt: &DateTime<Local>, with_seconds: bool) -> String {
+    let guard = SYSTEM.lock().unwrap();
+    match guard.as_ref() {
+        Some((list, full)) => dt.format(if with_seconds { full } else { list }).to_string(),
+        None => dt.format("%d.%m.%Y %H:%M").to_string(),
     }
 }
 
