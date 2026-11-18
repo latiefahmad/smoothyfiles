@@ -177,6 +177,7 @@ pub const EN: &[(&str, &str)] = &[
     ("Sistem, Windows'un açık/koyu ayarını izler", "System follows the Windows light/dark setting"),
     ("Açık", "On"),
     ("Koyu", "Dark"),
+    ("Siyah (OLED)", "Black (OLED)"),
     ("Dil / Language", "Language"),
     ("Sistem, Windows'un görüntüleme dilini izler", "System follows the Windows display language"),
     ("Varsayılan görünüm", "Default view"),

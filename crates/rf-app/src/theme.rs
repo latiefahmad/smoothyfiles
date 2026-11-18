@@ -113,9 +113,11 @@ impl Palette {
     }
 
     pub fn for_window(window: &Window) -> Self {
-        let mut p = match crate::settings::theme_override() {
+        let pref = crate::settings::theme_override();
+        let mut p = match pref {
             crate::settings::ThemePref::Light => Self::light(),
             crate::settings::ThemePref::Dark => Self::dark(),
+            crate::settings::ThemePref::Black => Self::black(),
             crate::settings::ThemePref::System => match window.appearance() {
                 WindowAppearance::Dark | WindowAppearance::VibrantDark => Self::dark(),
                 _ => Self::light(),
@@ -123,8 +125,25 @@ impl Palette {
         };
         if crate::settings::solid_backdrop() {
             // "Solid" material: Windows 11's plain window color instead of Mica
-            p.window_bg = if p.dark { hex(0x202020) } else { hex(0xF3F3F3) };
+            p.window_bg = match pref {
+                crate::settings::ThemePref::Black => hex(0x000000),
+                _ if p.dark => hex(0x202020),
+                _ => hex(0xF3F3F3),
+            };
         }
+        p
+    }
+
+    /// Dark with pure black surfaces: an OLED's switched-off pixels, no desktop glow anywhere.
+    pub fn black() -> Self {
+        let mut p = Self::dark();
+        p.window_bg = hex(0x000000);
+        p.titlebar_bg = hexa(0x000000, 0.0);
+        p.sidebar_bg = hexa(0x000000, 0.0);
+        p.content_bg = hexa(0x000000, 0.35);
+        p.card_bg = hex(0x161616);
+        p.tile_bg = hexa(0xFFFFFF, 0.04);
+        p.tab_active = hexa(0xFFFFFF, 0.05);
         p
     }
 }

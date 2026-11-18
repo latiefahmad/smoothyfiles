@@ -15,6 +15,8 @@ pub enum ThemePref {
     System,
     Light,
     Dark,
+    /// Pure black for OLED screens (Settings › Appearance › Theme › Black (OLED)).
+    Black,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -621,7 +623,8 @@ impl Settings {
             match self.theme {
                 ThemePref::System => 0,
                 ThemePref::Light => 1,
-                ThemePref::Dark => 2,
+                // Black (OLED) is a dark theme: everything that only knows light/dark sees dark
+                ThemePref::Dark | ThemePref::Black => 2,
             },
             Ordering::Relaxed,
         );
@@ -663,7 +666,8 @@ pub fn apply_component_theme(cx: &mut App) {
     use gpui_kit::component::theme::{Theme, ThemeMode};
     match cx.global::<Settings>().theme {
         ThemePref::Light => Theme::change(ThemeMode::Light, None, cx),
-        ThemePref::Dark => Theme::change(ThemeMode::Dark, None, cx),
+        // Black (OLED) keeps the component widgets dark; the palette brings the black surfaces
+        ThemePref::Dark | ThemePref::Black => Theme::change(ThemeMode::Dark, None, cx),
         ThemePref::System => Theme::sync_system_appearance(None, cx),
     }
     // The component root paints the theme background under every window; keep it clear so

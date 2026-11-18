@@ -53,6 +53,9 @@ pub struct DialogView {
     input: Option<Entity<InputState>>,
     choices: Vec<Choice>,
     buttons: Vec<Button>,
+    /// The button the keyboard is on (the ring): starts on the default one, Enter and Space
+    /// press it, Tab and the arrow keys move it.
+    focus_ix: usize,
     focus: FocusHandle,
     _sub: Option<Subscription>,
 }
@@ -102,6 +105,13 @@ fn show_inner(
     cx: &mut App,
 ) {
     let restore = window.focused(cx);
+    // the default button: the one Enter presses (Primary; a question whose answer is the red
+    // button takes that; otherwise the last, usually Cancel)
+    let focus_ix = buttons
+        .iter()
+        .position(|b| b.kind == Kind::Primary)
+        .or_else(|| buttons.iter().position(|b| b.kind == Kind::Danger))
+        .unwrap_or(buttons.len().saturating_sub(1));
     let view = cx.new(|cx| {
         let input = input.map(|(initial, placeholder)| {
             cx.new(|cx| {
@@ -128,6 +138,7 @@ fn show_inner(
             input,
             choices,
             buttons,
+            focus_ix,
             focus: cx.focus_handle(),
             _sub: sub,
         }
@@ -192,6 +203,14 @@ impl Render for DialogView {
                 Kind::Danger => (p.danger, p.accent_text),
                 Kind::Normal => (p.hover, p.text),
             };
+            // the keyboard's button carries a ring, as Windows' own questions draw theirs
+            let ring = if ix == self.focus_ix {
+                if b.kind == Kind::Primary { p.text } else { p.accent }
+            } else if b.kind == Kind::Normal {
+                p.border
+            } else {
+                hsla(0., 0., 0., 0.)
+            };
             buttons = buttons.child(
                 div()
                     .id(("dlg-btn", ix))
@@ -205,11 +224,15 @@ impl Render for DialogView {
                     .text_sm()
                     .bg(bg)
                     .text_color(fg)
-                    .when(b.kind == Kind::Normal, |d| d.border_1().border_color(p.border))
+                    .border_1()
+                    .border_color(ring)
                     .hover(|s| s.opacity(0.9))
                     .active(|s| s.opacity(0.8))
                     .child(b.label.clone())
-                    .on_click(cx.listener(move |this, _, window, cx| this.press(ix, window, cx))),
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.focus_ix = ix;
+                        this.press(ix, window, cx)
+                    })),
             );
         }
         let mut choice_rows = Vec::new();
@@ -255,16 +278,45 @@ impl Render for DialogView {
             .bg(hsla(0., 0., 0., 0.35))
             .track_focus(&self.focus)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| match ev.keystroke.key.as_str() {
-                "escape" => {
-                    close(window, cx);
-                    cx.stop_propagation();
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                // without a text box the buttons own the keyboard; with one, only Tab moves
+                let free = this.input.is_none();
+                match ev.keystroke.key.as_str() {
+                    "escape" => {
+                        close(window, cx);
+                        cx.stop_propagation();
+                    }
+                    "enter" if free => {
+                        this.press(this.focus_ix, window, cx);
+                        cx.stop_propagation();
+                    }
+                    "space" if free => {
+                        this.press(this.focus_ix, window, cx);
+                        cx.stop_propagation();
+                    }
+                    "tab" => {
+                        if !this.buttons.is_empty() {
+                            this.focus_ix = (this.focus_ix + 1) % this.buttons.len();
+                            cx.notify();
+                        }
+                        cx.stop_propagation();
+                    }
+                    "left" | "up" if free => {
+                        if !this.buttons.is_empty() {
+                            this.focus_ix = (this.focus_ix + this.buttons.len() - 1) % this.buttons.len();
+                            cx.notify();
+                        }
+                        cx.stop_propagation();
+                    }
+                    "right" | "down" if free => {
+                        if !this.buttons.is_empty() {
+                            this.focus_ix = (this.focus_ix + 1) % this.buttons.len();
+                            cx.notify();
+                        }
+                        cx.stop_propagation();
+                    }
+                    _ => {}
                 }
-                "enter" if this.input.is_none() => {
-                    this.press_primary(window, cx);
-                    cx.stop_propagation();
-                }
-                _ => {}
             }))
             .child(
                 v_flex()

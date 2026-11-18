@@ -10,6 +10,7 @@ mod archive_view;
 mod bulk_rename;
 mod command_palette;
 mod conflict_dialog;
+mod win_e;
 mod ctx_menu;
 mod disk_usage;
 mod fluent_menu;
@@ -564,6 +565,8 @@ pub fn main() {
         // With "run in the background" on, the app stays in the notification area instead.
         background::init(cx);
         quick_search::init(cx);
+        // Win+E while this is the default file manager (Windows 11 25H2 / 26H2 skip the setting)
+        win_e::init(cx);
         // GPUI would quit by itself when the last window closes (QuitMode::Default on Windows):
         // that cut running copies in half and makes background mode impossible. We decide.
         cx.set_quit_mode(gpui_kit::QuitMode::Explicit);

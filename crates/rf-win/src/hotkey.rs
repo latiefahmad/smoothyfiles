@@ -17,8 +17,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::w;
 
-const ID: i32 = 0x5251; // "RQ"
+const ID: i32 = 0x5251; // "RQ": the quick search
+const WIN_E_ID: i32 = 0x5745; // "WE": Win+E while smoothyfiles is the default file manager
 const WM_SET: u32 = WM_APP + 31;
+const WM_SET_WIN_E: u32 = WM_APP + 32;
 
 /// Why a shortcut can't be the hotkey.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,7 +35,10 @@ struct Hotkey {
     hwnd: isize,
     /// Commands for the hotkey thread: the shortcut to hold (None: none) and where to answer.
     pending: Mutex<Option<(Option<(HOT_KEY_MODIFIERS, u32)>, Sender<Result<(), HotkeyError>>)>>,
+    /// The same, for the Win+E slot.
+    pending_win_e: Mutex<Option<(Option<(HOT_KEY_MODIFIERS, u32)>, Sender<Result<(), HotkeyError>>)>>,
     on_press: Mutex<Option<Box<dyn Fn() + Send>>>,
+    on_win_e: Mutex<Option<Box<dyn Fn() + Send>>>,
 }
 
 fn hotkey() -> &'static Hotkey {
@@ -58,7 +63,7 @@ fn hotkey() -> &'static Hotkey {
                 }
             })
             .expect("spawn hotkey thread");
-        Hotkey { hwnd: rx.recv().unwrap_or(0), pending: Mutex::new(None), on_press: Mutex::new(None) }
+        Hotkey { hwnd: rx.recv().unwrap_or(0), pending: Mutex::new(None), pending_win_e: Mutex::new(None), on_press: Mutex::new(None), on_win_e: Mutex::new(None) }
     })
 }
 
@@ -70,15 +75,22 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             LRESULT(0)
         }
+        WM_HOTKEY if wp.0 as i32 == WIN_E_ID => {
+            if let Some(f) = hotkey().on_win_e.lock().as_ref() {
+                f();
+            }
+            LRESULT(0)
+        }
         WM_SET => {
             if let Some((keys, reply)) = hotkey().pending.lock().take() {
-                unsafe {
-                    let _ = UnregisterHotKey(Some(hwnd), ID);
-                }
-                let r = match keys {
-                    None => Ok(()),
-                    Some((mods, vk)) => unsafe { RegisterHotKey(Some(hwnd), ID, mods | MOD_NOREPEAT, vk) }.map_err(|_| HotkeyError::Taken),
-                };
+                let r = apply(hwnd, ID, keys);
+                let _ = reply.send(r);
+            }
+            LRESULT(0)
+        }
+        WM_SET_WIN_E => {
+            if let Some((keys, reply)) = hotkey().pending_win_e.lock().take() {
+                let r = apply(hwnd, WIN_E_ID, keys);
                 let _ = reply.send(r);
             }
             LRESULT(0)
@@ -87,9 +99,41 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
     }
 }
 
+/// Replaces what the slot holds: `None` releases the shortcut.
+fn apply(hwnd: HWND, id: i32, keys: Option<(HOT_KEY_MODIFIERS, u32)>) -> Result<(), HotkeyError> {
+    unsafe {
+        let _ = UnregisterHotKey(Some(hwnd), id);
+    }
+    keys.map_or(Ok(()), |(mods, vk)| {
+        unsafe { RegisterHotKey(Some(hwnd), id, mods | MOD_NOREPEAT, vk) }.map_err(|_| HotkeyError::Taken)
+    })
+}
+
 /// Where a press goes (called on the hotkey thread; the newest caller wins).
 pub fn set_handler(f: impl Fn() + Send + 'static) {
     *hotkey().on_press.lock() = Some(Box::new(f));
+}
+
+/// Where a Win+E press goes (called on the hotkey thread; the newest caller wins).
+pub fn set_win_e_handler(f: impl Fn() + Send + 'static) {
+    *hotkey().on_win_e.lock() = Some(Box::new(f));
+}
+
+/// Holds (or releases) Win+E system wide while this process runs: Windows 11 25H2 / 26H2 start
+/// File Explorer from Win+E directly and skip what the default file manager writes, so the app
+/// catches the key itself. Released when the process ends, whatever it held.
+pub fn set_win_e(on: bool) -> Result<(), HotkeyError> {
+    let h = hotkey();
+    if h.hwnd == 0 {
+        return Err(HotkeyError::Taken);
+    }
+    let (tx, rx) = channel();
+    let keys = on.then(|| (MOD_WIN, 'E' as u32));
+    *h.pending_win_e.lock() = Some((keys, tx));
+    unsafe {
+        let _ = PostMessageW(Some(HWND(h.hwnd as *mut _)), WM_SET_WIN_E, WPARAM(0), LPARAM(0));
+    }
+    rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap_or(Err(HotkeyError::Taken))
 }
 
 /// Makes `keys` (GPUI's syntax, as the shortcut editor records it: "alt-space",

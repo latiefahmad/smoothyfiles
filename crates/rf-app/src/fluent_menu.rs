@@ -303,7 +303,7 @@ fn sync_popups(view: &Entity<MenuView>, cx: &mut App) -> bool {
     };
     let dark = match crate::settings::theme_override() {
         crate::settings::ThemePref::Light => false,
-        crate::settings::ThemePref::Dark => true,
+        crate::settings::ThemePref::Dark | crate::settings::ThemePref::Black => true,
         crate::settings::ThemePref::System => dark,
     };
     let keep = have.iter().zip(&wanted).take_while(|(h, w)| h.1 == **w).count();

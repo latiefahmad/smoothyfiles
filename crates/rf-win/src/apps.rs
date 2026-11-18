@@ -24,6 +24,15 @@ impl App {
     pub fn parsing(&self) -> String {
         format!("{APPS_FOLDER}\\{}", self.id)
     }
+
+    /// Is this id still an app of the AppsFolder? An uninstalled app's id no longer resolves
+    /// there. Blocking (shell): worker threads only.
+    pub fn still_installed(&self) -> bool {
+        ensure_com();
+        let w = wide(&self.parsing());
+        let item: windows::core::Result<IShellItem> = unsafe { SHCreateItemFromParsingName(PCWSTR(w.as_ptr()), None) };
+        item.is_ok()
+    }
 }
 
 fn display(item: &IShellItem, sigdn: SIGDN) -> Option<String> {

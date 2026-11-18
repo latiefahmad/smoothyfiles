@@ -154,7 +154,7 @@ fn open(key: SharedString, field: Bounds<Pixels>, choices: Vec<Choice>, window: 
 
     let dark = match crate::settings::theme_override() {
         crate::settings::ThemePref::Light => false,
-        crate::settings::ThemePref::Dark => true,
+        crate::settings::ThemePref::Dark | crate::settings::ThemePref::Black => true,
         crate::settings::ThemePref::System => matches!(cx.window_appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark),
     };
     let main = window.window_handle();

@@ -544,7 +544,7 @@ fn appearance(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
                 "theme",
                 p,
                 s.theme,
-                vec![(ThemePref::System, t!("Sistem ayarını kullan").into()), (ThemePref::Light, crate::i18n::tx("Açık", "Light").into()), (ThemePref::Dark, t!("Koyu").into())],
+                vec![(ThemePref::System, t!("Sistem ayarını kullan").into()), (ThemePref::Light, crate::i18n::tx("Açık", "Light").into()), (ThemePref::Dark, t!("Koyu").into()), (ThemePref::Black, t!("Siyah (OLED)").into())],
                 |s, v| s.theme = v,
             ),
         ),
@@ -1684,6 +1684,7 @@ fn advanced(p: &Palette, s: &Settings) -> Vec<AnyElement> {
                         log::warn!("default file manager: {e:#}");
                     }
                     crate::DEFAULT_FM.store(rf_win::default_fm::is_enabled(classes), std::sync::atomic::Ordering::Relaxed);
+                    crate::win_e::sync(rf_win::default_fm::is_enabled(classes));
                 });
                 window.refresh();
             }),

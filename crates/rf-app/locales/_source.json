@@ -5844,5 +5844,11 @@
   "key": "Notepad'te düzenle",
   "tr": "Notepad'te düzenle",
   "en": "Edit in Notepad"
+ },
+ {
+  "id": "768be356",
+  "key": "Siyah (OLED)",
+  "tr": "Siyah (OLED)",
+  "en": "Black (OLED)"
  }
 ]

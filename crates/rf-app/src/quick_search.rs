@@ -508,11 +508,16 @@ fn search(query: &str, engine: WebSearch, with_bookmarks: bool, index_on: bool) 
     let lift = |t: &Target| used.get(&t.key()).map_or(0, boost);
     let mut items = Vec::new();
     if q.is_empty() {
-        // nothing typed: what was opened most lately
+        // nothing typed: what was opened most lately — a file deleted or an app uninstalled
+        // since is left out
         let mut v: Vec<&Use> = used.values().filter(|u| !matches!(u.target, Target::Web { .. })).collect();
         v.sort_by_key(|u| std::cmp::Reverse(boost(u)));
-        // a file deleted since is left out
-        for u in v.into_iter().filter(|u| !matches!(&u.target, Target::Path { path, .. } if !path.exists())).take(8) {
+        let gone = |u: &Use| match &u.target {
+            Target::Path { path, .. } => !path.exists(),
+            Target::App { id, name } => !rf_win::apps::App { id: id.clone(), name: name.clone() }.still_installed(),
+            _ => false,
+        };
+        for u in v.into_iter().filter(|u| !gone(u)).take(8) {
             items.push(Item { target: u.target.clone(), title: u.title.clone(), detail: u.detail.clone(), section: Section::Recent, score: 0 });
         }
         return Found { items, index_building: false, index_off: false };
