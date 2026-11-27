@@ -2835,6 +2835,18 @@ const PREVIEW_MAX: f32 = 720.;
 struct ResizeSidebar;
 #[derive(Clone)]
 struct ResizePreview;
+/// The divider between the two panes of a split tab.
+#[derive(Clone)]
+struct ResizeSplit;
+
+/// The least and the most of a split tab the first pane may take.
+const SPLIT_MIN: f32 = 0.15;
+const SPLIT_MAX: f32 = 0.85;
+
+/// The first pane's share for a pointer at `at` between `start` and `start + size` (the tab's left and width, or top and height).
+fn split_share(at: f32, start: f32, size: f32) -> f32 {
+    if size <= 0.0 { 0.5 } else { ((at - start) / size).clamp(SPLIT_MIN, SPLIT_MAX) }
+}
 
 struct ResizeGhost;
 impl Render for ResizeGhost {
@@ -3244,9 +3256,18 @@ impl Render for Workspace {
             None => div().size_full().child(tab_state.left.clone()).into_any_element(),
             Some(right) => {
                 let side_by_side = cx.global::<crate::settings::Settings>().dual_pane_vertical;
+                // (a share the file holds that is no number, or out of range, is the middle)
+                let split = Some(cx.global::<crate::settings::Settings>().dual_pane_split)
+                    .filter(|s| s.is_finite())
+                    .map_or(0.5, |s| s.clamp(SPLIT_MIN, SPLIT_MAX));
                 let pane = |view: Entity<FolderView>, is_right: bool, active: bool, cx: &mut Context<Self>| {
                     div()
-                        .flex_1()
+                        // the first pane has its share, the second what is left
+                        .map(|d| match (is_right, side_by_side) {
+                            (true, _) => d.flex_1(),
+                            (false, true) => d.flex_none().w(relative(split)),
+                            (false, false) => d.flex_none().h(relative(split)),
+                        })
                         .min_w_0()
                         .min_h_0()
                         .when(side_by_side, |d| d.h_full())
@@ -3262,10 +3283,50 @@ impl Render for Workspace {
                 };
                 let left = pane(tab_state.left.clone(), false, !tab_state.right_active, cx);
                 let right = pane(right.clone(), true, tab_state.right_active, cx);
+                // The divider is dragged. Its handle is a strip 7 px across laid over the line, the last child so that it is
+                // above both panes; the press is the handle's alone (it must not start a selection box in the pane under it).
+                let handle = div()
+                    .id("split-resize")
+                    .absolute()
+                    .map(|d| {
+                        if side_by_side {
+                            d.top_0().bottom_0().left(relative(split)).ml(px(-3.)).w(px(7.)).cursor_col_resize()
+                        } else {
+                            d.left_0().right_0().top(relative(split)).mt(px(-3.)).h(px(7.)).cursor_row_resize()
+                        }
+                    })
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_drag(ResizeSplit, |_, _, _, cx| cx.new(|_| ResizeGhost));
+                let follow = cx.listener(move |_, e: &DragMoveEvent<ResizeSplit>, _, cx| {
+                    let share = if side_by_side {
+                        split_share(f32::from(e.event.position.x), f32::from(e.bounds.left()), f32::from(e.bounds.size.width))
+                    } else {
+                        split_share(f32::from(e.event.position.y), f32::from(e.bounds.top()), f32::from(e.bounds.size.height))
+                    };
+                    if (share - cx.global::<crate::settings::Settings>().dual_pane_split).abs() > 0.001 {
+                        crate::settings::update_live(cx, |s| s.dual_pane_split = share);
+                    }
+                });
                 if side_by_side {
-                    h_flex().size_full().child(left).child(div().w(px(1.)).h_full().bg(p.divider)).child(right).into_any_element()
+                    h_flex()
+                        .size_full()
+                        .relative()
+                        .on_drag_move(follow)
+                        .child(left)
+                        .child(div().flex_none().w(px(1.)).h_full().bg(p.divider))
+                        .child(right)
+                        .child(handle)
+                        .into_any_element()
                 } else {
-                    v_flex().size_full().child(left).child(div().h(px(1.)).w_full().bg(p.divider)).child(right).into_any_element()
+                    v_flex()
+                        .size_full()
+                        .relative()
+                        .on_drag_move(follow)
+                        .child(left)
+                        .child(div().flex_none().h(px(1.)).w_full().bg(p.divider))
+                        .child(right)
+                        .child(handle)
+                        .into_any_element()
                 }
             }
         };
@@ -3589,6 +3650,20 @@ mod tests {
         assert_ne!(users, "");
         assert_eq!(c[0].1, Location::Path(PathBuf::from(r"C:\")));
         assert_eq!(parse_location("d:"), Some(Location::Path(PathBuf::from(r"d:\"))));
+    }
+}
+
+#[cfg(test)]
+mod split_tests {
+    use super::{SPLIT_MAX, SPLIT_MIN, split_share};
+
+    #[test]
+    fn the_divider_follows_the_pointer_and_stops_before_a_pane_is_gone() {
+        assert_eq!(split_share(600.0, 100.0, 1000.0), 0.5);
+        assert_eq!(split_share(350.0, 100.0, 1000.0), 0.25);
+        assert_eq!(split_share(0.0, 100.0, 1000.0), SPLIT_MIN);
+        assert_eq!(split_share(5000.0, 100.0, 1000.0), SPLIT_MAX);
+        assert_eq!(split_share(10.0, 0.0, 0.0), 0.5, "a tab with no size yet");
     }
 }
 

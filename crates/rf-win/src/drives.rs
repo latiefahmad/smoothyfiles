@@ -51,48 +51,76 @@ impl Drive {
 /// so call this off the UI thread.
 pub fn list_drives() -> Vec<Drive> {
     let mask = unsafe { GetLogicalDrives() };
-    let mut out = Vec::new();
-    for i in 0..26u32 {
-        if mask & (1 << i) == 0 {
-            continue;
-        }
-        let letter = (b'A' + i as u8) as char;
-        let root = format!("{letter}:\\");
-        let w = wide(&root);
-        let kind = match unsafe { GetDriveTypeW(PCWSTR(w.as_ptr())) } {
-            2 => DriveKind::Removable,
-            3 => DriveKind::Fixed,
-            4 => DriveKind::Network,
-            5 => DriveKind::Optical,
-            6 => DriveKind::RamDisk,
-            _ => DriveKind::Unknown,
-        };
-        let mut label = [0u16; 261];
-        let mut fs = [0u16; 261];
-        let has_vol = unsafe {
-            GetVolumeInformationW(PCWSTR(w.as_ptr()), Some(&mut label), None, None, None, Some(&mut fs))
-        }
-        .is_ok();
-        if !has_vol && kind == DriveKind::Optical {
-            // empty DVD tray: still list it, without sizes
-        }
-        let (mut free, mut total) = (0u64, 0u64);
-        if has_vol {
-            unsafe {
-                let _ = GetDiskFreeSpaceExW(PCWSTR(w.as_ptr()), Some(&mut free), Some(&mut total), None);
-            }
-        }
-        out.push(Drive {
-            root: PathBuf::from(root),
-            letter,
-            label: from_wide(&label),
-            kind,
-            total,
-            free,
-            fs: from_wide(&fs),
-        });
+    let letters: Vec<(char, DriveKind)> = (0..26u32)
+        .filter(|i| mask & (1 << i) != 0)
+        .map(|i| {
+            let letter = (b'A' + i as u8) as char;
+            (letter, kind_of(letter))
+        })
+        .collect();
+    // Each drive is asked for its name and size on a thread of its own, all at once. A network drive whose server cannot be reached
+    // answers after seconds, and they were asked one after the other while the sidebar waited for the list (issue 194: three
+    // unavailable network drives, "it takes around 10 seconds before I can use it"). A network drive that has not answered by
+    // NETWORK_WAIT is listed without its name and size; the other kinds are waited for as before.
+    let asks: Vec<_> = letters
+        .iter()
+        .map(|&(letter, kind)| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let _ = std::thread::Builder::new().name("drive info".into()).spawn(move || {
+                let _ = tx.send(volume_of(letter, kind));
+            });
+            rx
+        })
+        .collect();
+    let deadline = std::time::Instant::now() + NETWORK_WAIT;
+    letters
+        .into_iter()
+        .zip(asks)
+        .map(|((letter, kind), rx)| {
+            let got = if kind == DriveKind::Network {
+                rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).ok()
+            } else {
+                rx.recv().ok()
+            };
+            got.unwrap_or_else(|| {
+                if kind == DriveKind::Network {
+                    log::info!("drives: {letter}: did not answer in time (a network drive whose server is away?), listed without its name");
+                }
+                Drive { root: PathBuf::from(format!("{letter}:\\")), letter, label: String::new(), kind, total: 0, free: 0, fs: String::new() }
+            })
+        })
+        .collect()
+}
+
+/// How long the list waits for a network drive's name and size (`list_drives`).
+const NETWORK_WAIT: std::time::Duration = std::time::Duration::from_millis(400);
+
+fn kind_of(letter: char) -> DriveKind {
+    let w = wide(format!("{letter}:\\"));
+    match unsafe { GetDriveTypeW(PCWSTR(w.as_ptr())) } {
+        2 => DriveKind::Removable,
+        3 => DriveKind::Fixed,
+        4 => DriveKind::Network,
+        5 => DriveKind::Optical,
+        6 => DriveKind::RamDisk,
+        _ => DriveKind::Unknown,
     }
-    out
+}
+
+/// A drive with its name, file system and sizes (none for an empty DVD tray or a volume that cannot be read).
+fn volume_of(letter: char, kind: DriveKind) -> Drive {
+    let root = format!("{letter}:\\");
+    let w = wide(&root);
+    let mut label = [0u16; 261];
+    let mut fs = [0u16; 261];
+    let has_vol = unsafe { GetVolumeInformationW(PCWSTR(w.as_ptr()), Some(&mut label), None, None, None, Some(&mut fs)) }.is_ok();
+    let (mut free, mut total) = (0u64, 0u64);
+    if has_vol {
+        unsafe {
+            let _ = GetDiskFreeSpaceExW(PCWSTR(w.as_ptr()), Some(&mut free), Some(&mut total), None);
+        }
+    }
+    Drive { root: PathBuf::from(root), letter, label: from_wide(&label), kind, total, free, fs: from_wide(&fs) }
 }
 
 #[cfg(test)]

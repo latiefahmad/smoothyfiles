@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/rf-core", "crates/rf-win", "crates/rf-app", "crates/rf-archive", "crates/rf-dialog", "crates/rf-player", "crates/rustdecoder", "tools/gpustress"]
+exclude = ["vendor/velopack"]
 
 [workspace.package]
 version = "0.6.0"
@@ -143,5 +144,7 @@ codegen-units = 16
 incremental = true
 
 [patch.crates-io]
+# Velopack with one change: its downloads trust the Windows certificate store, see vendor/velopack/VENDORED.md
+velopack = { path = "vendor/velopack" }
 # our fork of GPUI's Windows layer (GPU/CPU hot-swap renderer), see its FORK.md
 gpui-pre-windows = { git = "https://github.com/gelenmedya/gpui-pre-windows", rev = "e2966a6c332e5e96ebb1acbb6eedc18ea652fab5" }

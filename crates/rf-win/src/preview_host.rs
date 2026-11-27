@@ -70,6 +70,8 @@ struct Player {
     /// state still says the old thing for a moment, and a second press decided from it would
     /// repeat the first command instead of undoing it.
     asked: Option<(bool, std::time::Instant)>,
+    /// Where the first play starts, in seconds (the file was left at this point earlier: `media_play_from`).
+    start_at: Option<f64>,
 }
 
 const PLAY_TIMER: usize = 1;
@@ -131,6 +133,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                         let _ = mp.SetMute(true);
                     }
                 }
+                // (the place it was left at, once: the position can only be set when the file is open)
+                let from = HOST.with(|h| h.try_borrow_mut().ok().and_then(|mut h| h.as_mut()?.player.as_mut()?.start_at.take()));
+                if let Some(secs) = from {
+                    use windows::Win32::Media::MediaFoundation::MFP_POSITIONTYPE_100NS;
+                    let at = windows::Win32::System::Com::StructuredStorage::PROPVARIANT::from((secs.max(0.0) * 1e7) as i64);
+                    unsafe {
+                        let _ = mp.SetPosition(&MFP_POSITIONTYPE_100NS, &at);
+                    }
+                }
                 unsafe { mp.Play() }.is_ok()
             };
             let give_up = HOST.with(|h| {
@@ -186,7 +197,7 @@ pub fn is_playable(path: &Path) -> bool {
     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
     matches!(
         ext.as_str(),
-        "mp4" | "m4v" | "mov" | "mkv" | "webm" | "avi" | "wmv" | "mpg" | "mpeg" | "ts" | "m2ts" | "3gp" | "mp3" | "wav" | "m4a" | "aac" | "flac" | "wma" | "ogg" | "opus"
+        "mp4" | "m4v" | "mov" | "mkv" | "webm" | "avi" | "wmv" | "mpg" | "mpeg" | "ts" | "m2ts" | "mts" | "3gp" | "mp3" | "wav" | "m4a" | "aac" | "flac" | "wma" | "ogg" | "opus"
     )
 }
 
@@ -262,6 +273,12 @@ fn mf_create() -> Option<MfpCreate> {
 /// `None` plays without a visible window (audio). Re-pressing play on the same file resumes.
 /// Call on the shell STA thread.
 pub fn media_play(owner: isize, path: &Path, rect: Option<RECT>) {
+    media_play_from(owner, path, rect, None)
+}
+
+/// [`media_play`] that starts a file that is not open yet at `start` seconds instead of at its beginning (the preview pane's "go
+/// on where it was left"). A file that is already open goes on from where it is, whatever `start` says.
+pub fn media_play_from(owner: isize, path: &Path, rect: Option<RECT>, start: Option<f64>) {
     use windows::Win32::Media::MediaFoundation::{IMFPMediaPlayer, MFP_OPTION_NONE};
     use windows::Win32::UI::WindowsAndMessaging::SetTimer;
     use windows_core::Interface;
@@ -297,7 +314,7 @@ pub fn media_play(owner: isize, path: &Path, rect: Option<RECT>) {
         let mp = unsafe { IMFPMediaPlayer::from_raw(raw) };
         HOST.with(|h| {
             if let Some(x) = h.borrow_mut().as_mut() {
-                x.player = Some(Player { path: path.to_path_buf(), mp, pending_play: 0, asked: None });
+                x.player = Some(Player { path: path.to_path_buf(), mp, pending_play: 0, asked: None, start_at: start });
             }
         });
     }

@@ -255,14 +255,18 @@ fn title_with(s: &str, turkish: bool) -> String {
     })
 }
 
-/// Case-insensitive sort weight of a (non-digit) character.
-/// - Punctuation and symbols (ASCII) before letters, as in Explorer.
+/// Case-insensitive sort weight of a character (two digits are compared as numbers before this is asked).
+/// - Punctuation and symbols (ASCII) before digits and letters, as in Explorer. Digits have a weight of their own:
+///   by code point `_` and the other signs after `9` (`: ; = @ [ ] ^ { } ~`) came after the digits, so "_test" stood
+///   below "1_test" where Explorer has it on top.
+/// - Digits, then letters.
 /// - Latin letters in alphabet order, with the Turkish letters right after their base letter
 ///   (c ç d … g ğ h ı i … o ö p … s ş t u ü v) instead of after `z` by code point.
 /// - Everything else after, by code point.
 #[inline]
 fn rank(c: char) -> u32 {
     const LETTERS: u32 = 0x1000;
+    const DIGITS: u32 = 0x100;
     let r = |b: char| LETTERS + (b as u32 - 'a' as u32) * 4;
     let c = match c {
         'I' if TURKISH.load(AtomicOrdering::Relaxed) => 'ı',
@@ -272,6 +276,7 @@ fn rank(c: char) -> u32 {
     let l = if c.is_ascii() { c.to_ascii_lowercase() } else { c.to_lowercase().next().unwrap_or(c) };
     match l {
         'a'..='z' => r(l),
+        '0'..='9' => DIGITS + l as u32,
         'ç' => r('c') + 2,
         'ğ' => r('g') + 2,
         'ı' => r('i') - 2,
@@ -316,6 +321,19 @@ mod tests {
                 assert_eq!(natural_cmp(x, y), natural_cmp(y, x).reverse(), "{x} {y}");
             }
         }
+    }
+
+    #[test]
+    fn signs_stand_before_digits_and_digits_before_letters() {
+        let mut v = vec!["2_test.txt", "a.txt", "1_test.txt", "_test.txt", "~x", "[x]", "9"];
+        v.sort_by(|a, b| natural_cmp(a, b));
+        assert_eq!(v, vec!["[x]", "_test.txt", "~x", "1_test.txt", "2_test.txt", "9", "a.txt"]);
+        // the same with a letter that takes the other path
+        let mut t = vec!["1_ç", "_ç", "ç"];
+        t.sort_by(|a, b| natural_cmp(a, b));
+        assert_eq!(t, vec!["_ç", "1_ç", "ç"]);
+        // inside a name too: a sign against a digit
+        assert_eq!(natural_cmp("a_1", "a1"), Ordering::Less);
     }
 
     #[test]

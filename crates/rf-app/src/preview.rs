@@ -49,12 +49,22 @@ pub struct Preview {
     /// Our own audio / video player for the current target (Media Foundation, in the host
     /// window): created on the first Play, never by just selecting a file.
     player: Option<PlayerUi>,
+    /// The file whose playback was last stopped part way, where (seconds) and its length: Play on it goes on from there (`left_at`).
+    resume: Option<(PathBuf, f64, f64)>,
     /// The last thumbnail shown, and when the target last changed: while the next file's
     /// thumbnail loads, the previous one stays up briefly instead of flashing the type icon.
     last_thumb: Option<std::sync::Arc<RenderImage>>,
     /// An item inside an archive and its extracted copy (thumbnails come from the copy).
     archive_copy: Option<(PathBuf, PathBuf)>,
     _archive_task: Option<Task<()>>,
+    /// The target is an item inside an archive: there is no file on disk for it until `archive_copy` has one.
+    in_archive: bool,
+    /// Set when the target changes: an extraction still running for the previous one stops there.
+    archive_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// An extraction for the target is on its way (or resting before it starts).
+    fetching: bool,
+    /// Play was pressed on a member that is not extracted yet: (video, owner window). It starts once the copy is there.
+    play_wait: Option<(bool, isize)>,
     changed_at: std::time::Instant,
     _hold_task: Option<Task<()>>,
 }
@@ -71,7 +81,19 @@ struct PlayerUi {
     state: Option<rf_win::preview_host::MediaState>,
     /// The seek bar's bounds (window coordinates), for click-to-seek.
     bar: std::rc::Rc<std::cell::Cell<Option<Bounds<Pixels>>>>,
+    /// Where the first play starts (the place this file was left at), until it has been used.
+    resume_at: Option<f64>,
     _poll: Option<Task<()>>,
+}
+
+/// The place a file that stopped at `position` of `duration` seconds is taken up again, `None` when it starts over: one that had
+/// hardly begun, and one that was at its end.
+///
+/// WHY (issue 326): the pane has one player, and it stops whenever the pane shows something else. Switching to another tab, or
+/// clicking another file, threw the place in a long recording away: back on the file, Play began at 0:00.
+fn left_at(position: f64, duration: f64) -> Option<f64> {
+    const EDGE: f64 = 2.0;
+    (duration > 0.0 && position >= EDGE && position < duration - EDGE).then_some(position)
 }
 
 /// A closing window (or tab) must not leave audio playing: the app can stay in the tray.
@@ -91,6 +113,11 @@ enum Extra {
 
 fn is_markdown(e: &Entry) -> bool {
     matches!(&*e.ext, "md" | "markdown" | "mdx")
+}
+
+/// Types whose properties hold more than the file system knows (a length, a resolution, an author).
+fn is_rich(e: &Entry) -> bool {
+    matches!(icons::category(e), Category::Image | Category::Video | Category::Audio | Category::Pdf | Category::Document | Category::Spreadsheet)
 }
 
 fn is_text_like(e: &Entry) -> bool {
@@ -119,9 +146,14 @@ impl Preview {
             extra: None,
             _extra_task: None,
             player: None,
+            resume: None,
             last_thumb: None,
             archive_copy: None,
             _archive_task: None,
+            in_archive: false,
+            archive_cancel: Default::default(),
+            fetching: false,
+            play_wait: None,
             changed_at: std::time::Instant::now(),
             _hold_task: None,
         }
@@ -153,7 +185,8 @@ impl Preview {
         let p = Palette::for_window(window);
         let cat = icons::category(&e);
         let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
-        let handler = !self.occluded && self.wants_handler(&path, &e, cx);
+        let real = self.real_of(&path);
+        let handler = !self.occluded && real.is_some() && self.wants_handler(&path, &e, cx);
         let text = self.text.as_ref().filter(|(tp, _)| *tp == path).map(|(_, t)| t.clone());
         // audio / video: our player, as in the pane
         let playable = !handler && self.playable(&path, &e);
@@ -177,7 +210,7 @@ impl Preview {
                 .into_any_element()
         } else if handler {
             let me = cx.entity().downgrade();
-            let hp = path.clone();
+            let hp = real.unwrap_or_else(|| path.clone());
             div()
                 .size_full()
                 .child(
@@ -313,8 +346,75 @@ impl Preview {
 
     /// Stops our player (and hides its video).
     fn stop_player(&mut self) {
-        if self.player.take().is_some_and(|p| p.started) {
-            rf_win::sta::run(|_| rf_win::preview_host::hide());
+        let Some(pl) = self.player.take() else { return };
+        if !pl.started {
+            return;
+        }
+        // (remembered for the one file that played last; a file played to its end starts over)
+        if let Some(st) = pl.state {
+            match left_at(st.position, st.duration) {
+                Some(at) => self.resume = Some((pl.path, at, st.duration)),
+                None if self.resume.as_ref().is_some_and(|r| r.0 == pl.path) => self.resume = None,
+                None => {}
+            }
+        }
+        rf_win::sta::run(|_| rf_win::preview_host::hide());
+    }
+
+    /// The file on disk for the target `path`: itself, or for an item inside an archive its extracted copy (None until it is there).
+    ///
+    /// WHY (rustyfiles Discord, 2026-11-24: "MP3 & MP4 files inside archives" showed in DirectLook and not in the pane): a Windows
+    /// preview handler and our player were both handed the path inside the archive, which no program can open.
+    fn real_of(&self, path: &Path) -> Option<PathBuf> {
+        if !self.in_archive {
+            return Some(path.to_path_buf());
+        }
+        self.archive_copy.as_ref().filter(|(v, _)| v == path).map(|(_, real)| real.clone())
+    }
+
+    /// Extracts the target (an item inside an archive) in the background, after `rest` when given; `copy_arrived` takes the result.
+    fn fetch_copy(&mut self, path: PathBuf, rest: Option<std::time::Duration>, cx: &mut Context<Self>) {
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.archive_cancel = cancel.clone();
+        self.fetching = true;
+        self._archive_task = Some(cx.spawn(async move |this, cx| {
+            if let Some(rest) = rest {
+                cx.background_executor().timer(rest).await;
+            }
+            let p2 = path.clone();
+            let work = cx.background_spawn(async move { crate::archive_view::real_copy_with(&p2, &|| cancel.load(std::sync::atomic::Ordering::Relaxed)) });
+            let real = work.await;
+            let _ = this.update(cx, |v, cx| v.copy_arrived(path, real, cx));
+        }));
+    }
+
+    /// The extraction of `path` ended (None: it failed).
+    fn copy_arrived(&mut self, path: PathBuf, real: Option<PathBuf>, cx: &mut Context<Self>) {
+        let Some(e) = self.target.as_ref().filter(|(t, _)| *t == path).map(|(_, e)| e.clone()) else { return };
+        self.fetching = false;
+        let play = self.play_wait.take();
+        cx.notify();
+        let Some(real) = real else { return };
+        self.archive_copy = Some((path.clone(), real.clone()));
+        // the length, the resolution and the like are read from the copy
+        if is_rich(&e) {
+            let work = cx.background_spawn(async move { rf_win::props::media_props(&real) });
+            let p = path.clone();
+            self._media_task = Some(cx.spawn(async move |this, cx| {
+                let props = work.await;
+                let _ = this.update(cx, |v, cx| {
+                    if v.target.as_ref().is_some_and(|(tp, _)| *tp == p) {
+                        v.media = Some((p, props));
+                        cx.notify();
+                    }
+                });
+            }));
+        }
+        // (where Windows has a preview handler for the type, the pane now shows that instead of our player)
+        if let Some((video, owner)) = play {
+            if self.occluded || !self.wants_handler(&path, &e, cx) {
+                self.player_start(video, owner, cx);
+            }
         }
     }
 
@@ -346,17 +446,35 @@ impl Preview {
     fn player_toggle(&mut self, video: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some((path, _)) = self.target.clone() else { return };
         let Some(owner) = Self::owner(window) else { return };
-        let pl = self.player.get_or_insert_with(|| PlayerUi { path: path.clone(), started: false, rect: None, state: None, bar: Default::default(), _poll: None });
+        if self.real_of(&path).is_none() {
+            // inside an archive and not extracted yet: Play fetches it first, whatever its size (as DirectLook does)
+            self.play_wait = Some((video, owner));
+            if !self.fetching {
+                self.fetch_copy(path, None, cx);
+            }
+            cx.notify();
+            return;
+        }
+        self.player_start(video, owner, cx);
+    }
+
+    /// Starts, pauses or goes on with the target, whose file is on disk (`real_of`).
+    fn player_start(&mut self, video: bool, owner: isize, cx: &mut Context<Self>) {
+        let Some((path, _)) = self.target.clone() else { return };
+        let Some(media) = self.real_of(&path) else { return };
+        let resume_at = self.resume.as_ref().filter(|r| r.0 == path).map(|r| r.1);
+        let pl = self.player.get_or_insert_with(|| PlayerUi { path: path.clone(), started: false, rect: None, state: None, bar: Default::default(), resume_at, _poll: None });
         let playing = pl.state.is_some_and(|s| s.playing);
         if playing {
             rf_win::sta::run(|_| rf_win::preview_host::media_pause());
         } else if !video {
             // audio: no window to show
             pl.started = true;
-            rf_win::sta::run(move |_| rf_win::preview_host::media_play(owner, &path, None));
+            let from = pl.resume_at.take();
+            rf_win::sta::run(move |_| rf_win::preview_host::media_play_from(owner, &media, None, from));
         } else if pl.started {
             let rect = pl.rect.map(|r| windows::Win32::Foundation::RECT { left: r[0], top: r[1], right: r[2], bottom: r[3] });
-            rf_win::sta::run(move |_| rf_win::preview_host::media_play(owner, &path, rect));
+            rf_win::sta::run(move |_| rf_win::preview_host::media_play(owner, &media, rect));
         } else {
             // the video box takes its place on the next frame and starts playback there
             pl.started = true;
@@ -401,16 +519,18 @@ impl Preview {
         }
         let r = Self::screen_rect(bounds, window);
         let Some(owner) = Self::owner(window) else { return };
+        let Some(media) = self.real_of(&path) else { return };
         let Some(pl) = self.player.as_mut().filter(|p| p.path == path && p.started) else { return };
         if pl.rect == Some(r) {
             return;
         }
         let first = pl.rect.is_none();
         pl.rect = Some(r);
+        let from = pl.resume_at.take().filter(|_| first);
         let rect = windows::Win32::Foundation::RECT { left: r[0], top: r[1], right: r[2], bottom: r[3] };
         rf_win::sta::run(move |_| {
             if first {
-                rf_win::preview_host::media_play(owner, &path, Some(rect));
+                rf_win::preview_host::media_play_from(owner, &media, Some(rect), from);
             } else {
                 rf_win::preview_host::media_reposition(rect);
             }
@@ -419,7 +539,12 @@ impl Preview {
 
     /// Play / pause, a seek bar and the time, under the visual.
     fn render_player_bar(&self, p: &Palette, video: bool, cx: &mut Context<Self>) -> AnyElement {
-        let st = self.player.as_ref().and_then(|pl| pl.state);
+        // (before Play is pressed on a file that was left part way: the bar and the time stand where it will go on)
+        let left = || {
+            let (path, at, len) = self.resume.as_ref()?;
+            self.target.as_ref().is_some_and(|(t, _)| t == path).then_some(rf_win::preview_host::MediaState { playing: false, position: *at, duration: *len })
+        };
+        let st = self.player.as_ref().and_then(|pl| pl.state).or_else(left);
         let playing = st.is_some_and(|s| s.playing);
         let (pos, dur) = st.map_or((0.0, 0.0), |s| (s.position, s.duration));
         let frac = if dur > 0.0 { (pos / dur).clamp(0.0, 1.0) as f32 } else { 0.0 };
@@ -454,7 +579,11 @@ impl Preview {
                     .bg(p.accent)
                     .cursor_pointer()
                     .hover(|s| s.opacity(0.85))
-                    .child(Icon::new(if playing { L::Pause } else { L::Play }).size(px(16.)).text_color(gpui_kit::white()))
+                    .child(
+                        Icon::new(if self.play_wait.is_some() { L::LoaderCircle } else if playing { L::Pause } else { L::Play })
+                            .size(px(16.))
+                            .text_color(gpui_kit::white()),
+                    )
                     .on_click(cx.listener(move |this, _, window, cx| this.player_toggle(video, window, cx))),
             )
             .child(
@@ -608,6 +737,14 @@ impl Preview {
         self._media_task = None;
         self.extra = None;
         self._extra_task = None;
+        // (an extraction still running for the previous target stops)
+        self.archive_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        self._archive_task = None;
+        self.fetching = false;
+        self.play_wait = None;
+        // by the path alone (no disk access on the UI thread): a parent named like an archive
+        let in_archive = self.target.as_ref().is_some_and(|(path, _)| path.ancestors().skip(1).any(|a| a.as_os_str().len() > 3 && crate::archive_view::is_browsable(a)));
+        self.in_archive = in_archive;
         if let Some((path, e)) = &self.target {
             let p = path.clone();
             let work: Option<Task<Option<Extra>>> = if e.is_dir() || e.is_cloud_placeholder() {
@@ -647,11 +784,8 @@ impl Preview {
             }
         }
         if let Some((path, e)) = &self.target {
-            let rich = matches!(
-                icons::category(e),
-                Category::Image | Category::Video | Category::Audio | Category::Pdf | Category::Document | Category::Spreadsheet
-            );
-            if rich && !e.is_dir() && !e.is_cloud_placeholder() {
+            // (an item inside an archive: from its copy, in `copy_arrived`)
+            if is_rich(e) && !e.is_dir() && !e.is_cloud_placeholder() && !in_archive {
                 let p = path.clone();
                 let p2 = path.clone();
                 let work = cx.background_spawn(async move { rf_win::props::media_props(&p2) });
@@ -700,24 +834,20 @@ impl Preview {
                 .detach();
             }
         }
-        if let Some((path, e)) = &self.target {
-            // by the path alone (no disk access on the UI thread): a parent named like an archive
-            let in_archive = path.ancestors().skip(1).any(|a| a.as_os_str().len() > 3 && crate::archive_view::is_browsable(a));
-            if in_archive && e.size <= crate::archive_view::PREVIEW_EXTRACT_MAX && !e.is_dir() && icons::has_thumbnail(e) {
-                // images (and other thumbnailed files) inside an archive: extract, then the
-                // thumbnail is made from the copy
-                let p2 = path.clone();
-                let work = cx.background_spawn(async move { crate::archive_view::real_copy(&p2) });
-                let path2 = path.clone();
-                self._archive_task = Some(cx.spawn(async move |this, cx| {
-                    if let Some(real) = work.await {
-                        let _ = this.update(cx, |v, cx| {
-                            v.archive_copy = Some((path2, real));
-                            cx.notify();
-                        });
-                    }
-                }));
+        if let Some((path, e)) = self.target.clone() {
+            // pictures, sound, video and the other pictured files inside an archive: extracted, then the thumbnail, a Windows preview
+            // handler and our player all work on the copy
+            let shown = icons::has_thumbnail(&e) || matches!(icons::category(&e), Category::Video | Category::Audio);
+            if in_archive && !e.is_dir() && shown {
+                use crate::archive_view::PaneCopy;
+                match crate::archive_view::pane_copy(e.size) {
+                    PaneCopy::AtOnce => self.fetch_copy(path.clone(), None, cx),
+                    PaneCopy::Rested => self.fetch_copy(path.clone(), Some(crate::archive_view::PREVIEW_REST), cx),
+                    PaneCopy::Asked => {}
+                }
             }
+        }
+        if let Some((path, e)) = &self.target {
             if !e.is_dir() && is_text_like(e) && e.size > 0 && !e.is_cloud_placeholder() && (!in_archive || e.size <= crate::archive_view::PREVIEW_EXTRACT_MAX) {
                 let path = path.clone();
                 let p2 = path.clone();
@@ -825,7 +955,8 @@ impl Render for Preview {
         }
         let cat = icons::category(&e);
         let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
-        let handler = !self.occluded && self.wants_handler(&path, &e, cx);
+        let real = self.real_of(&path);
+        let handler = !self.occluded && real.is_some() && self.wants_handler(&path, &e, cx);
         let playable = !handler && self.playable(&path, &e);
         let video = matches!(cat, Category::Video);
         let video_on = playable && video && !self.occluded && self.player.as_ref().is_some_and(|pl| pl.path == path && pl.started);
@@ -852,7 +983,7 @@ impl Render for Preview {
         } else if handler {
             // a Windows preview handler draws here (in its own window, kept over this box)
             let me = cx.entity().downgrade();
-            let hp = path.clone();
+            let hp = real.unwrap_or_else(|| path.clone());
             div()
                 .w_full()
                 .h(px(420.))
@@ -939,7 +1070,7 @@ impl Render for Preview {
             props = props.child(prop_row(&p, t!("Boyut"), txt));
         }
         if !e.is_dir() {
-            props = props.child(prop_row(&p, t!("Boyut"), format!("{} ({} {})", format::size(e.size), group(e.size), t!("bayt"))));
+            props = props.child(prop_row(&p, t!("Boyut"), size_and_bytes(e.size)));
         }
         if let Some((mp, list)) = &self.media {
             if *mp == path {
@@ -1001,8 +1132,19 @@ impl Render for Preview {
     }
 }
 
+/// A size as the details say it: "2,4 MB (2.516.582 bayt)", the short form and the exact count of bytes. A size that is
+/// below one unit is its count of bytes already, and it is said once: "14 bayt", not "14 bayt (14 bayt)".
+pub(crate) fn size_and_bytes(n: u64) -> String {
+    let short = format::size(n);
+    if short.starts_with(&format!("{n} ")) {
+        short
+    } else {
+        format!("{short} ({} {})", group(n), t!("bayt"))
+    }
+}
+
 /// 1234567 → "1.234.567"
-fn group(n: u64) -> String {
+pub(crate) fn group(n: u64) -> String {
     let sep = if crate::i18n::is_tr() { '.' } else { ',' };
     let s = n.to_string();
     let mut out = String::new();
@@ -1013,4 +1155,27 @@ fn group(n: u64) -> String {
         out.push(c);
     }
     out
+}
+
+#[cfg(test)]
+mod size_tests {
+    use super::{group, left_at, size_and_bytes};
+
+    #[test]
+    fn a_file_stopped_part_way_goes_on_from_there_and_one_at_either_end_starts_over() {
+        assert_eq!(left_at(95.5, 240.0), Some(95.5));
+        assert_eq!(left_at(1.0, 240.0), None, "it had hardly begun");
+        assert_eq!(left_at(239.0, 240.0), None, "it was at its end");
+        assert_eq!(left_at(240.0, 240.0), None);
+        assert_eq!(left_at(30.0, 0.0), None, "a length that is not known yet");
+    }
+
+    /// A size under one unit is said once (the properties card showed "14 bytes (14 bytes)").
+    #[test]
+    fn a_small_size_is_not_said_twice() {
+        let small = size_and_bytes(14);
+        assert!(!small.contains('('), "{small}");
+        let big = size_and_bytes(2_516_582);
+        assert!(big.contains('(') && big.contains(&group(2_516_582)), "{big}");
+    }
 }

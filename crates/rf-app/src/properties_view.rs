@@ -38,11 +38,39 @@ use crate::theme::{self, Palette};
 const READONLY: u32 = 0x1;
 const HIDDEN: u32 = 0x2;
 
-/// Opens a Properties window for `paths` (one window per call), on the display of the window
-/// in front.
+thread_local! {
+    /// The Properties windows that are open: the items each one shows (see [`same_items`]) and its window.
+    static OPEN: std::cell::RefCell<Vec<(Vec<String>, AnyWindowHandle)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The items of a Properties window as one value that is equal for the same items in any order and any letter case.
+fn same_items(paths: &[PathBuf]) -> Vec<String> {
+    let mut key: Vec<String> = paths.iter().map(|p| p.to_string_lossy().trim_end_matches('\\').to_lowercase()).collect();
+    key.sort();
+    key.dedup();
+    key
+}
+
+/// The window that already shows exactly these items, if it is still open. Windows that were closed leave the list here.
+fn open_window_for(key: &[String], cx: &mut App) -> Option<AnyWindowHandle> {
+    let all: Vec<(Vec<String>, AnyWindowHandle)> = OPEN.with(|o| std::mem::take(&mut *o.borrow_mut()));
+    let alive: Vec<_> = all.into_iter().filter(|(_, h)| h.update(cx, |_, _, _| ()).is_ok()).collect();
+    let found = alive.iter().find(|(k, _)| k.as_slice() == key).map(|(_, h)| *h);
+    OPEN.with(|o| *o.borrow_mut() = alive);
+    found
+}
+
+/// Opens a Properties window for `paths`, on the display of the window in front. One window per item (or per set of items):
+/// asked again for what a window already shows, that window comes to the front instead of a second one opening over it.
 pub fn open(paths: Vec<PathBuf>, images: Entity<ImageCache>, cx: &mut App) {
     if paths.is_empty() {
         return;
+    }
+    let key = same_items(&paths);
+    if let Some(open) = open_window_for(&key, cx) {
+        if open.update(cx, |_, window, _| window.activate_window()).is_ok() {
+            return;
+        }
     }
     let display = cx.active_window().and_then(|w| w.update(cx, |_, w, cx| w.display(cx).map(|d| d.id())).ok().flatten());
     let options = WindowOptions {
@@ -52,9 +80,19 @@ pub fn open(paths: Vec<PathBuf>, images: Entity<ImageCache>, cx: &mut App) {
         window_background: WindowBackgroundAppearance::MicaBackdrop,
         ..TitleBar::window_options()
     };
-    if let Err(e) = gpui_kit::open_window(options, cx, move |window, cx| cx.new(|cx| PropsView::new(paths, images, window, cx))) {
-        log::error!("properties window: {e:#}");
+    match gpui_kit::open_window(options, cx, move |window, cx| cx.new(|cx| PropsView::new(paths, images, window, cx))) {
+        Ok((handle, _)) => OPEN.with(|o| o.borrow_mut().push((key, handle))),
+        Err(e) => log::error!("properties window: {e:#}"),
     }
+}
+
+/// A Properties window renamed its item: it is that item's window from now on.
+fn items_changed(window: AnyWindowHandle, paths: &[PathBuf]) {
+    OPEN.with(|o| {
+        if let Some(entry) = o.borrow_mut().iter_mut().find(|(_, h)| *h == window) {
+            entry.0 = same_items(paths);
+        }
+    });
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -634,6 +672,7 @@ impl PropsView {
                         if let Some((from, to)) = renamed {
                             crate::undo::push(crate::undo::UndoOp::Renamed { from, to });
                         }
+                        items_changed(window.window_handle(), &paths);
                         v.paths = paths;
                         v.attrs.commit();
                         v.recurse = false;
@@ -796,7 +835,7 @@ impl PropsView {
                     if i.is_dir {
                         let (size, contents) = match &self.folder {
                             Some(Some(fs)) => (
-                                format!("{} ({} {})", format::size(fs.bytes), group(fs.bytes), t!("bayt")),
+                                crate::preview::size_and_bytes(fs.bytes),
                                 format!("{} {}, {} {}", group(fs.files), t!("dosya"), group(fs.dirs), t!("klasör")),
                             ),
                             Some(None) if self.folder.is_some() => (t!("Hesaplanıyor…").into(), t!("Hesaplanıyor…").into()),
@@ -804,13 +843,13 @@ impl PropsView {
                         };
                         card1.push(row(p, t!("Boyut"), size));
                         if let Some(d) = self.folder.as_ref().and_then(|f| f.as_ref()).and_then(|fs| fs.allocated) {
-                            card1.push(row(p, t!("Disk üzerindeki boyut"), format!("{} ({} {})", format::size(d), group(d), t!("bayt"))));
+                            card1.push(row(p, t!("Disk üzerindeki boyut"), crate::preview::size_and_bytes(d)));
                         }
                         card1.push(row(p, t!("İçerik"), contents));
                     } else {
-                        card1.push(row(p, t!("Boyut"), format!("{} ({} {})", format::size(i.size), group(i.size), t!("bayt"))));
+                        card1.push(row(p, t!("Boyut"), crate::preview::size_and_bytes(i.size)));
                         if let Some(d) = i.size_on_disk {
-                            card1.push(row(p, t!("Disk üzerindeki boyut"), format!("{} ({} {})", format::size(d), group(d), t!("bayt"))));
+                            card1.push(row(p, t!("Disk üzerindeki boyut"), crate::preview::size_and_bytes(d)));
                         }
                     }
                 }
@@ -827,8 +866,8 @@ impl PropsView {
             card1.push(row(p, t!("Tür"), kind));
             card1.push(row(p, t!("Konum"), format!("{} {dir}", t!("Tümü şurada:"))));
             let suffix = if t.done { String::new() } else { format!(" — {}", t!("hesaplanıyor…")) };
-            card1.push(row(p, t!("Boyut"), format!("{} ({} {}){suffix}", format::size(t.bytes), group(t.bytes), t!("bayt"))));
-            card1.push(row(p, t!("Disk üzerindeki boyut"), format!("{} ({} {}){suffix}", format::size(t.on_disk), group(t.on_disk), t!("bayt"))));
+            card1.push(row(p, t!("Boyut"), format!("{}{suffix}", crate::preview::size_and_bytes(t.bytes))));
+            card1.push(row(p, t!("Disk üzerindeki boyut"), format!("{}{suffix}", crate::preview::size_and_bytes(t.on_disk))));
             card1.push(row(p, t!("İçerik"), format!("{} {}, {} {}", group(t.files), t!("dosya"), group(t.dirs), t!("klasör"))));
         }
         out.push(card(p, card1));
@@ -944,7 +983,7 @@ impl PropsView {
         };
         let used = d.total.saturating_sub(d.free);
         let frac = d.used_fraction().clamp(0.0, 1.0);
-        let bytes = |n: u64| format!("{} ({} {})", format::size(n), group(n), t!("bayt"));
+        let bytes = |n: u64| crate::preview::size_and_bytes(n);
         let swatch = |c: Hsla| div().size(px(12.)).rounded(px(3.)).bg(c).flex_shrink_0();
         let full = frac > 0.9;
         let used_color = if full { p.danger } else { p.accent };
@@ -1865,6 +1904,18 @@ impl Render for PropsView {
 #[cfg(test)]
 mod tests {
     use super::{ARCHIVE, AtomicBool, NOT_INDEXED, Path, READONLY, attrs_from, is_pe, is_root, merge_attrs, signable, walk};
+
+    #[test]
+    fn a_window_is_found_again_by_its_items_in_any_order_and_letter_case() {
+        use super::same_items;
+        use std::path::PathBuf;
+        let a = same_items(&[PathBuf::from(r"C:\Docs\a.txt"), PathBuf::from(r"C:\Docs\B.txt")]);
+        let b = same_items(&[PathBuf::from(r"c:\docs\b.txt"), PathBuf::from(r"C:\Docs\a.txt")]);
+        assert_eq!(a, b);
+        assert_ne!(a, same_items(&[PathBuf::from(r"C:\Docs\a.txt")]));
+        // a folder with and without its closing backslash is one item
+        assert_eq!(same_items(&[PathBuf::from(r"C:\Docs\")]), same_items(&[PathBuf::from(r"C:\Docs")]));
+    }
 
     #[test]
     fn attribute_tristates_merge() {

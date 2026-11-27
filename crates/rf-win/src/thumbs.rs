@@ -34,6 +34,54 @@ pub enum Kind {
     Icon,
     /// Real thumbnail if the shell has one; otherwise falls back to the icon.
     Thumbnail,
+    /// The file's own picture or nothing (an error): for types that may or may not have one (see `has_provider`), where the
+    /// caller has something better to show than this one file's icon.
+    ThumbnailOnly,
+}
+
+/// Whether the shell has a thumbnail provider for files of this extension (lower case, no dot): one a program registered for the
+/// type itself, for its class or for its kind. Read from the registry once for each extension and remembered until the program ends
+/// (a provider installed meanwhile is seen after a restart).
+///
+/// WHY: thumbnails were asked for a fixed list of types only (pictures, videos, PDFs and a few more), so a type that a thumbnail
+/// extension such as SageThumbs 2K draws (`.pcraft`, `.swf`, a sound file's cover) stayed an icon here while Explorer showed its
+/// picture.
+pub fn has_provider(ext: &str) -> bool {
+    static KNOWN: Mutex<Option<std::collections::HashMap<String, bool>>> = Mutex::new(None);
+    if ext.is_empty() || ext.len() > 32 || !ext.chars().all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '+' | '~')) {
+        return false;
+    }
+    if let Some(&known) = KNOWN.lock().get_or_insert_with(Default::default).get(ext) {
+        return known;
+    }
+    // (asked outside the lock: two threads may both ask about a new extension, and both get the same answer)
+    let found = provider_of(ext).is_some_and(|p| Some(&p) != none_provider().as_ref());
+    KNOWN.lock().get_or_insert_with(Default::default).insert(ext.to_string(), found);
+    found
+}
+
+/// What the shell answers for an extension nobody registered: a provider that stands for every file there is (should one exist)
+/// is no sign that this type has a picture of its own.
+fn none_provider() -> Option<String> {
+    static NONE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    NONE.get_or_init(|| provider_of("rustyfiles-no-such-type")).clone()
+}
+
+/// The class of the thumbnail provider the shell would use for this extension (IThumbnailProvider, or the older IExtractImage).
+fn provider_of(ext: &str) -> Option<String> {
+    use windows::Win32::UI::Shell::{ASSOCF_NONE, ASSOCSTR_SHELLEXTENSION, AssocQueryStringW};
+    let dotted = wide(format!(".{ext}"));
+    ["{E357FCCD-A995-4576-B01F-234630154E96}", "{BB2E617C-0920-11D1-9A0B-00C04FC2D6C1}"].iter().find_map(|interface| {
+        let interface = wide(interface);
+        let mut buf = [0u16; 64];
+        let mut len = buf.len() as u32;
+        // SAFETY: both strings end in a zero and `len` is the buffer's size in characters
+        let hr = unsafe {
+            AssocQueryStringW(ASSOCF_NONE, ASSOCSTR_SHELLEXTENSION, PCWSTR(dotted.as_ptr()), PCWSTR(interface.as_ptr()), Some(windows::core::PWSTR(buf.as_mut_ptr())), &mut len)
+        };
+        let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        (hr.is_ok() && end > 0).then(|| String::from_utf16_lossy(&buf[..end]).to_uppercase())
+    })
 }
 
 /// Starts GDI+ once and never shuts it down.
@@ -110,6 +158,7 @@ pub fn get_image(path: &Path, size: u32, kind: Kind) -> anyhow::Result<Bgra> {
                 .GetImage(sz, SIIGBF(SIIGBF_THUMBNAILONLY.0 | SIIGBF_RESIZETOFIT.0 | SIIGBF_BIGGERSIZEOK.0))
                 .or_else(|_| factory.GetImage(sz, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK))?
         },
+        Kind::ThumbnailOnly => unsafe { factory.GetImage(sz, SIIGBF(SIIGBF_THUMBNAILONLY.0 | SIIGBF_RESIZETOFIT.0 | SIIGBF_BIGGERSIZEOK.0))? },
     };
     let r = hbitmap_to_bgra(hbmp);
     unsafe {
@@ -173,6 +222,50 @@ pub fn has_unique_icon(ext: &str) -> bool {
     matches!(ext, "exe" | "lnk" | "ico" | "url" | "cur" | "ani" | "scr" | "cpl" | "msc" | "appref-ms" | "website")
 }
 
+/// How many pixels of a picture are kept (its longer side), for a request of `size`.
+///
+/// Up to three times what was asked: the askers that give their size in the interface's pixels count on a bigger picture to stay
+/// sharp on a scaled display (three times covers 300 %, and leaves Windows' usual 256 px thumbnails alone for anything asked at
+/// 86 px and up), but not on ANY size. The first time a video's thumbnail is made, Windows hands back the frame it took, 1280 x
+/// 720 and 3.6 MB for a request of 144 px (measured on four new videos; asked a second time it gives 256 x 144). A screenful of
+/// those filled the 64 MB the pictures may take, the ones in view were thrown out and asked for again, and the tiles went back to
+/// their icons and to their pictures over and over until each had been asked for twice (a Discord report on 1.0.0: "thumbnails
+/// ... keep switching back to the file icon").
+fn kept_px(size: u32) -> u32 {
+    size.saturating_mul(3)
+}
+
+/// A picture that came out bigger than its box on the screen, made to fit `size` (its longer side); any other is handed back as it
+/// is. Done on the worker's thread.
+fn fit_to(b: Bgra, size: u32) -> Bgra {
+    let longest = b.width.max(b.height);
+    if size == 0 || longest <= size || b.data.len() != (b.width as usize) * (b.height as usize) * 4 {
+        return b;
+    }
+    let side = |v: u32| ((v as u64 * size as u64 + longest as u64 / 2) / longest as u64).max(1) as u32;
+    let (w, h) = (side(b.width), side(b.height));
+    let mut data = b.data;
+    for p in data.chunks_exact_mut(4) {
+        let a = p[3] as u32;
+        if a != 255 {
+            p[0] = ((p[0] as u32 * a + 127) / 255) as u8;
+            p[1] = ((p[1] as u32 * a + 127) / 255) as u8;
+            p[2] = ((p[2] as u32 * a + 127) / 255) as u8;
+        }
+    }
+    let Some(src) = image::RgbaImage::from_raw(b.width, b.height, data) else { return Bgra { width: 0, height: 0, data: Vec::new() } };
+    let mut data = image::imageops::resize(&src, w, h, image::imageops::FilterType::CatmullRom).into_raw();
+    for p in data.chunks_exact_mut(4) {
+        let a = p[3] as u32;
+        if a != 0 && a != 255 {
+            p[0] = ((p[0] as u32 * 255 + a / 2) / a).min(255) as u8;
+            p[1] = ((p[1] as u32 * 255 + a / 2) / a).min(255) as u8;
+            p[2] = ((p[2] as u32 * 255 + a / 2) / a).min(255) as u8;
+        }
+    }
+    Bgra { width: w, height: h, data }
+}
+
 pub struct Request {
     pub key: u64,
     pub path: PathBuf,
@@ -218,7 +311,7 @@ impl ThumbPool {
                         loop {
                             let req = stack.lock().pop();
                             let Some(req) = req else { break };
-                            let image = get_image(&req.path, req.size, req.kind).ok().map(Arc::new);
+                            let image = get_image(&req.path, req.size, req.kind).ok().map(|b| fit_to(b, kept_px(req.size))).map(Arc::new);
                             on_done(Response { key: req.key, image, dropped: false });
                         }
                     }
@@ -250,6 +343,28 @@ impl ThumbPool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A type has a thumbnail provider only when the shell has one registered for it.
+    #[test]
+    fn a_type_has_a_thumbnail_provider_only_when_one_is_registered_for_it() {
+        // (Windows registers one for its own picture types; nothing does for a type nobody knows, a name that is no extension, or none)
+        assert!(super::has_provider("jpg"), "{:?}", super::provider_of("jpg"));
+        assert!(!super::has_provider("rustyfiles-another-unknown-type"));
+        assert!(!super::has_provider(""));
+        assert!(!super::has_provider(r"a\b"));
+    }
+
+    /// What is kept of a picture: up to three times the asked size, so a video's first thumbnail does not stay at its frame's size.
+    #[test]
+    fn a_videos_first_thumbnail_does_not_stay_at_the_frames_size() {
+        assert_eq!((kept_px(144), kept_px(96)), (432, 288));
+        let frame = || Bgra { width: 1280, height: 720, data: vec![255; 1280 * 720 * 4] };
+        let kept = fit_to(frame(), kept_px(144));
+        assert_eq!((kept.width, kept.height), (432, 243), "a list that asked in the interface's pixels");
+        // Windows' usual thumbnail for the same request is left as it is
+        let usual = fit_to(Bgra { width: 256, height: 144, data: vec![9; 256 * 144 * 4] }, kept_px(144));
+        assert_eq!((usual.width, usual.height, usual.data[0]), (256, 144, 9));
+    }
 
     /// A JPEG with a red top-left corner, turned clockwise via its EXIF tag: the shell
     /// thumbnail must show the red corner at the top right (it came out upside down once).

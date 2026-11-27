@@ -241,6 +241,8 @@ impl Render for CommandPalette {
             .left_0()
             .size_full()
             .bg(hsla(0., 0., 0., 0.25))
+            // (the wheel over the palette is the palette's: at the end of its list it went on to the folder behind)
+            .occlude()
             .on_mouse_down(MouseButton::Left, cx.listener(|_, _, _, cx| cx.emit(PaletteEvent::Dismiss)))
             .child(
                 v_flex()

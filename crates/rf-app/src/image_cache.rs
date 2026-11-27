@@ -215,7 +215,20 @@ impl ImageCache {
     }
 
     pub fn thumbnail(&mut self, dir: &Path, e: &Entry, size: u32, cx: &mut Context<Self>) -> Option<Arc<RenderImage>> {
-        let wants_thumb = crate::icons::has_thumbnail(e);
+        // A type outside our own list that a thumbnail provider is registered for (a sound file's cover, a font's sample, what an
+        // installed extension draws): its own picture when it has one. Until that is known, and when it has none, the tile shows
+        // what it would for any other file (the type's icon, below).
+        if crate::icons::may_have_thumbnail(e) {
+            let key = key_of(&[&"own", &dir, &&*e.name, &e.modified_ms, &size]);
+            let path = dir.join(&*e.name);
+            let own = self.lookup(key, || Request { key, path, size, kind: Kind::ThumbnailOnly }, true);
+            if own.is_some() {
+                self.evict_over_budget();
+                self.release_evicted(cx);
+                return own;
+            }
+        }
+        let wants_thumb = crate::icons::has_sure_thumbnail(e);
         let per_file = wants_thumb || (!e.is_dir() && has_unique_icon(&e.ext));
         let key = if per_file {
             key_of(&[&"thumb", &dir, &&*e.name, &e.modified_ms, &size])

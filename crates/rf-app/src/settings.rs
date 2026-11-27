@@ -316,6 +316,9 @@ pub struct Settings {
     pub dual_pane_new_tabs: bool,
     /// Dual pane side by side (true) or stacked (false).
     pub dual_pane_vertical: bool,
+    /// The share of the tab the first pane takes (the left one, or the upper one when stacked): the
+    /// divider between the two panes is dragged. 0.5 is the middle.
+    pub dual_pane_split: f32,
     pub menu: MenuPrefs,
     pub smooth_scroll: bool,
 
@@ -444,6 +447,7 @@ impl Default for Settings {
             focus_new_tab: false,
             dual_pane_new_tabs: false,
             dual_pane_vertical: true,
+            dual_pane_split: 0.5,
             menu: MenuPrefs::default(),
             smooth_scroll: true,
             show_scrollbar: true,
@@ -696,6 +700,30 @@ pub fn update(cx: &mut App, f: impl FnOnce(&mut Settings)) {
     apply_component_theme(cx);
     std::thread::spawn(move || s.save());
     cx.refresh_windows();
+}
+
+/// [`update`] while something is dragged (the split tab's divider): the windows follow at once, the
+/// file is written once the drag pauses instead of on every step.
+pub fn update_live(cx: &mut App, f: impl FnOnce(&mut Settings)) {
+    static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    cx.update_global::<Settings, _>(|s, _| f(s));
+    cx.global::<Settings>().apply_side_effects();
+    apply_component_theme(cx);
+    cx.refresh_windows();
+    let mine = SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(400))
+            .await;
+        // a later step has its own timer: only the last one writes
+        if SERIAL.load(std::sync::atomic::Ordering::Relaxed) == mine {
+            cx.update(|cx| {
+                let snapshot = cx.global::<Settings>().clone();
+                std::thread::spawn(move || snapshot.save());
+            });
+        }
+    })
+    .detach();
 }
 
 #[cfg(test)]

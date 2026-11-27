@@ -298,6 +298,28 @@ pub fn count_start(cx: &mut gpui_kit::App) {
 mod tests {
     use super::{DAY_MS, donate_answered, donate_due, star_due};
 
+    /// Manual, needs the network: the update source's TLS setup (vendor/velopack: Windows' certificate store) reaches GitHub.
+    /// `cargo test -p rf-app --lib installer::tests::github_answers_through_the_windows_store -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn github_answers_through_the_windows_store() {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .tls_config(ureq::tls::TlsConfig::builder().root_certs(ureq::tls::RootCerts::PlatformVerifier).build())
+            .build()
+            .into();
+        // (an HTTP status of its own, such as 403 when GitHub is busy with this address, is still an answer: the certificate was
+        // trusted, which is what this checks)
+        match agent.get("https://api.github.com/repos/latiefahmad/smoothyfiles/releases?per_page=1").call() {
+            Ok(mut r) => {
+                let body = r.body_mut().read_to_string().unwrap();
+                println!("{} bytes", body.len());
+                assert!(body.contains("tag_name"));
+            }
+            Err(ureq::Error::StatusCode(code)) => println!("HTTP {code} (the certificate was trusted)"),
+            Err(e) => panic!("{e}"),
+        }
+    }
+
     #[test]
     fn coffee_strip_now_and_then() {
         let now = chrono::Utc::now().timestamp_millis();

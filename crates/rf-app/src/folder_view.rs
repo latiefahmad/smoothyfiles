@@ -148,6 +148,9 @@ struct Cols {
 #[derive(Clone)]
 struct ColumnResize;
 struct ColumnGhost;
+/// The Details list's sideways scrollbar thumb in the hand.
+#[derive(Clone)]
+struct SidewaysDrag;
 impl Render for ColumnGhost {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -275,6 +278,12 @@ pub struct FolderView {
     col_drag: Option<(usize, f32, f32)>,
     col_live: Option<[f32; 11]>,
     col_save_gen: u64,
+    /// How far the Details columns after Name are scrolled sideways, px: the columns that do not fit the pane are scrolled
+    /// to, with the Name column standing still, rather than left out. Kept within `sideways_most` where it is used.
+    h_off: f32,
+    /// The sideways bar: its track's left edge and width (measured where it is drawn) and where in the thumb the pointer took it.
+    hbar_track: std::rc::Rc<std::cell::Cell<(f32, f32)>>,
+    hbar_grab: std::rc::Rc<std::cell::Cell<f32>>,
     pub(crate) grid_style: GridStyle,
     content_width: Pixels,
     pub(crate) entries: Vec<Entry>,
@@ -332,6 +341,9 @@ pub struct FolderView {
     /// double-click time passes without a second click or a drag.
     slow_click: Option<(u32, u64)>,
     slow_click_serial: u64,
+    /// The first click of a possible pair: the entries generation and the item's name, so a second
+    /// click opens only what the first was made on (a third quick click starts a new pair).
+    first_click: Option<(u64, std::sync::Arc<str>)>,
     /// Entries of an in-flight background refresh (swapped in atomically when complete).
     soft_pending: Option<Vec<Entry>>,
     /// When Space opened Quick Look (a long press closes it again on release).
@@ -375,6 +387,12 @@ pub struct FolderView {
     drag_origin: Option<Point<Pixels>>,
     /// Rubber-band selection in list-content coordinates.
     marquee: Option<Marquee>,
+    /// Where the selection box reaches now (window px, inside the list's area) and how far the pointer is past the area's top
+    /// (negative) or bottom (positive) edge, which scrolls the list (`marquee_moved`).
+    marquee_at: Point<Pixels>,
+    marquee_over: f32,
+    /// The list is being scrolled under a selection box (`marquee_scroll_step`).
+    marquee_scrolling: bool,
     /// Type-to-select buffer and when it was last extended.
     typeahead: (String, Instant),
     _rename_sub: Option<Subscription>,
@@ -429,6 +447,9 @@ impl FolderView {
             col_drag: None,
             col_live: None,
             col_save_gen: 0,
+            h_off: 0.,
+            hbar_track: std::rc::Rc::new(std::cell::Cell::new((0., 0.))),
+            hbar_grab: std::rc::Rc::new(std::cell::Cell::new(0.)),
             grid_style: GridStyle::Tiles,
             content_width: px(900.),
             entries: Vec::new(),
@@ -476,6 +497,7 @@ impl FolderView {
             name_hit: false,
             slow_click: None,
             slow_click_serial: 0,
+            first_click: None,
             soft_pending: None,
             space_hold: None,
             soft_started: Instant::now(),
@@ -485,6 +507,9 @@ impl FolderView {
             _rename_sub: None,
             drag_origin: None,
             marquee: None,
+            marquee_at: Point::default(),
+            marquee_over: 0.,
+            marquee_scrolling: false,
             typeahead: (String::new(), Instant::now()),
             recycle: None,
             disk_usage: None,
@@ -2197,9 +2222,25 @@ impl FolderView {
             crate::settings::ClickPref::Folders => self.entries[ei as usize].is_dir(),
             crate::settings::ClickPref::Always => true,
         };
-        if plain && (ev.click_count >= 2 || (single && ev.click_count == 1)) {
-            self.select_only(vi);
-            self.open_entry(ei, cx);
+        // Clicks come in pairs, as Windows counts them: the third quick click starts a new pair (clicking fast through nested
+        // folders no longer treats its third and fourth clicks as a triple and a quadruple click). A second click opens only what
+        // the first click of the pair was made on.
+        let name = self.entries[ei as usize].name.clone();
+        let second = is_second_click(ev.click_count);
+        let double = second && self.first_click.as_ref().is_some_and(|(g, n)| *g == self.generation && n.as_ref() == name.as_ref());
+        self.first_click = (!second).then(|| (self.generation, name));
+        if second && !double {
+            // it landed on this row because the listing changed under the pointer: the user did not aim at it, so it does not
+            // even select it
+            return;
+        }
+        if plain && (double || (single && !second)) {
+            // with "open with a single click" the first release has opened it already: a double click out of habit must not start
+            // a program twice
+            if !(single && double) {
+                self.select_only(vi);
+                self.open_entry(ei, cx);
+            }
             return;
         }
         if ev.modifiers.shift {
@@ -2276,6 +2317,51 @@ impl FolderView {
         let p = self.content_point(ev.position);
         let base = if ev.modifiers.control || ev.modifiers.shift { self.selected.clone() } else { HashSet::new() };
         self.marquee = Some(Marquee { start: p, cur: p, base });
+        // (a loop left over from the last box stops at its next step)
+        self.marquee_over = 0.;
+    }
+
+    /// The pointer moved while a selection box is being drawn, wherever it is now: over the list, over another part of the window
+    /// or outside the window. The box reaches to the nearest point of the list's `area`, and past its top or bottom edge the list
+    /// scrolls, as in Explorer. WHY: the list heard the pointer only while it was over the list, so the box stood still as soon as
+    /// the pointer left it, towards the sidebar or out of the window.
+    fn marquee_moved(&mut self, pos: Point<Pixels>, area: Bounds<Pixels>, cx: &mut Context<Self>) {
+        let (l, t) = (f32::from(area.origin.x), f32::from(area.origin.y));
+        let (r, b) = (l + f32::from(area.size.width), t + f32::from(area.size.height));
+        let ((x, y), over) = marquee_reach((f32::from(pos.x), f32::from(pos.y)), (l, t, r, b));
+        self.marquee_at = point(px(x), px(y));
+        self.marquee_over = over;
+        self.update_marquee(self.marquee_at, cx);
+        if over != 0. && !self.marquee_scrolling {
+            self.marquee_scrolling = true;
+            const STEP: std::time::Duration = std::time::Duration::from_millis(16);
+            cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(STEP).await;
+                    if !this.update(cx, |v, cx| v.marquee_scroll_step(STEP.as_secs_f32(), cx)).unwrap_or(false) {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
+    }
+
+    /// One step of the scroll under a selection box whose pointer is past the list's top or bottom edge. `false`: it is over.
+    fn marquee_scroll_step(&mut self, secs: f32, cx: &mut Context<Self>) -> bool {
+        if self.marquee.is_none() || self.marquee_over == 0. {
+            self.marquee_scrolling = false;
+            return false;
+        }
+        let base = self.scroll.0.borrow().base_handle.clone();
+        let mut o = base.offset();
+        let y = (o.y - px(marquee_scroll_speed(self.marquee_over) * secs)).clamp(-base.max_offset().y, px(0.));
+        if y != o.y {
+            o.y = y;
+            base.set_offset(o);
+            self.update_marquee(self.marquee_at, cx);
+        }
+        true
     }
 
     fn update_marquee(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) {
@@ -2347,16 +2433,15 @@ impl FolderView {
         if w < px(3.) && h < px(3.) {
             return None;
         }
+        // (cut at the list's edges: a box whose start has scrolled out of view was drawn on over the toolbar)
         Some(
             div()
                 .absolute()
-                .left(x0)
-                .top(y0)
-                .w(w)
-                .h(h)
-                .bg(p.selection)
-                .border_1()
-                .border_color(p.selection_border)
+                .top_0()
+                .left_0()
+                .size_full()
+                .overflow_hidden()
+                .child(div().absolute().left(x0).top(y0).w(w).h(h).bg(p.selection).border_1().border_color(p.selection_border))
                 .into_any_element(),
         )
     }
@@ -2836,9 +2921,9 @@ impl FolderView {
         })
     }
 
-    /// Which Details columns show: the ones turned on that make sense here (git inside a
-    /// repository, sync with cloud files, location in search), then as many as fit the pane
-    /// in priority order — the name column keeps at least 180 px.
+    /// Which Details columns show: the ones turned on that make sense here (git inside a repository, sync with cloud files,
+    /// location in search). Every one of them is shown: what does not fit the pane is scrolled to sideways, with the Name
+    /// column standing still, rather than left out.
     fn visible_cols(&self, cx: &App) -> Cols {
         let c = &cx.global::<crate::settings::Settings>().columns;
         const PINNED: u32 = 0x80000;
@@ -2852,33 +2937,26 @@ impl FolderView {
                 }
             }
         };
-        let w = self.col_widths(cx);
-        let mut free = f32::from(self.content_width) - 180. - 24.;
-        let mut take = |want: bool, width: f32| -> bool {
-            if want && width <= free {
-                free -= width;
-                true
-            } else {
-                false
-            }
-        };
-        let size = take(c.size, w[3]);
-        let modified = take(c.modified, w[0]);
-        let kind = take(c.kind, f32::from(self.type_col_w(cx)));
-        let git = take(c.git && self.git.is_some(), w[5]);
-        let tags = take(c.tags && !self.is_search(), w[4]);
-        let sync = take(cloud, w[6]);
-        let created = take(c.created && !self.is_search(), w[1]);
         let repo = self.git.is_some() && !self.is_search();
-        let message = take(c.git_message && repo, w[7]);
-        let date = take(c.git_date && repo, w[9]);
-        let author = take(c.git_author && repo, w[8]);
-        let hash = take(c.git_hash && repo, w[10]);
-        Cols { modified, created, kind, size, tags, git, sync, commit: [message, author, date, hash] }
+        Cols {
+            modified: c.modified,
+            created: c.created && !self.is_search(),
+            kind: c.kind,
+            size: c.size,
+            tags: c.tags && !self.is_search(),
+            git: c.git && self.git.is_some(),
+            sync: cloud,
+            commit: [
+                c.git_message && repo,
+                c.git_author && repo,
+                c.git_date && repo,
+                c.git_hash && repo,
+            ],
+        }
     }
 
-    /// Width the visible Details columns leave unused (what [`Self::visible_cols`] still had free).
-    fn spare_width(&self, cx: &App) -> f32 {
+    /// Width the visible Details columns after Name take together.
+    fn used_width(&self, cx: &App) -> f32 {
         let vis = self.visible_cols(cx);
         let w = self.col_widths(cx);
         let mut used = 0.;
@@ -2895,7 +2973,111 @@ impl FolderView {
                 used += w[7 + i];
             }
         }
-        (f32::from(self.content_width) - 180. - 24. - used).max(0.)
+        used
+    }
+
+    /// The Name column's width: what the columns after it leave of the pane, at least 180 px (the rest is scrolled to).
+    fn name_now(&self, cx: &App) -> f32 {
+        let avail = f32::from(self.content_width) - 20.;
+        (avail - self.used_width(cx)).max(180.)
+    }
+
+    /// The Details columns after Name, sideways: how wide they are together, and how much of that the pane shows beside the
+    /// Name column. More than it shows is scrolled to (`h_off`).
+    fn sideways_room(&self, cx: &App) -> (f32, f32) {
+        let used = self.used_width(cx);
+        let avail = f32::from(self.content_width) - 20.;
+        (used, (avail - self.name_now(cx)).max(0.).min(used))
+    }
+
+    /// How far the columns after Name can be scrolled sideways (0: they all fit).
+    fn sideways_most(&self, cx: &App) -> f32 {
+        let (used, shown) = self.sideways_room(cx);
+        (used - shown).max(0.)
+    }
+
+    /// The columns after Name are scrolled sideways to `x` (a wheel, the bar).
+    fn scroll_sideways_to(&mut self, x: f32, cx: &mut Context<Self>) {
+        let x = x.clamp(0., self.sideways_most(cx)).round();
+        if (x - self.h_off).abs() >= 0.5 {
+            self.h_off = x;
+            cx.notify();
+        }
+    }
+
+    /// The Details list's sideways scrollbar, under the columns after Name, while they do not all fit. Its thumb is dragged;
+    /// a click on the track puts the thumb's middle there.
+    fn sideways_bar(&self, p: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (used, shown) = self.sideways_room(cx);
+        let most = (used - shown).max(0.);
+        if most < 1. {
+            return None;
+        }
+        let (start, share) = bar_thumb(self.h_off.clamp(0., most), most, shown);
+        let (track, grab) = (self.hbar_track.clone(), self.hbar_grab.clone());
+        let probe = canvas(
+            {
+                let track = track.clone();
+                move |b, _, _| track.set((f32::from(b.origin.x), f32::from(b.size.width)))
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
+        let (thumb, thumb_hover) = (p.text_tertiary.opacity(0.55), p.text_secondary.opacity(0.8));
+        let thumb_el = div()
+            .id("list-sideways-thumb")
+            .group("list-sideways-thumb")
+            .absolute()
+            .top_0()
+            .h_full()
+            .left(relative(start))
+            .w(relative(share))
+            .flex()
+            .items_center()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_drag(SidewaysDrag, move |_, at: Point<Pixels>, _, cx| {
+                grab.set(f32::from(at.x));
+                cx.new(|_| ColumnGhost)
+            })
+            .child(div().w_full().h(px(4.)).rounded_full().bg(thumb).group_hover("list-sideways-thumb", move |s| s.h(px(6.)).bg(thumb_hover)));
+        Some(
+            div()
+                .id("list-sideways-bar")
+                .absolute()
+                .left(px(10. + self.name_now(cx)))
+                .right(px(10.))
+                .bottom_0()
+                .h(px(10.))
+                .occlude()
+                .child(probe)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        let (left, wide) = track.get();
+                        if wide > 1. {
+                            let at = f32::from(ev.position.x) - left - wide * share / 2.;
+                            this.slide_sideways_bar(at, wide, cx);
+                        }
+                    }),
+                )
+                .on_drag_move(cx.listener(|this, ev: &DragMoveEvent<SidewaysDrag>, _, cx| {
+                    let (left, wide) = (f32::from(ev.bounds.origin.x), f32::from(ev.bounds.size.width));
+                    let at = f32::from(ev.event.position.x) - left - this.hbar_grab.get();
+                    this.slide_sideways_bar(at, wide, cx);
+                }))
+                .child(thumb_el)
+                .into_any_element(),
+        )
+    }
+
+    /// The bar's thumb was put `left` pixels into its track `track` wide: the columns go there.
+    fn slide_sideways_bar(&mut self, left: f32, track: f32, cx: &mut Context<Self>) {
+        let (used, shown) = self.sideways_room(cx);
+        let most = (used - shown).max(0.);
+        let to = bar_slide(left, track, most, shown);
+        self.scroll_sideways_to(to, cx);
     }
 
     fn render_header(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -2962,25 +3144,11 @@ impl FolderView {
             };
             d
         };
-        h_flex()
-            .h(px(30.))
-            .px(px(10.))
-            .overflow_hidden()
-            .text_xs()
-            .border_b_1()
-            .border_color(p.divider)
-            .on_drag_move(cx.listener(|this, e: &DragMoveEvent<ColumnResize>, _, cx| {
-                let Some((ix, sx, sw)) = this.col_drag else { return };
-                let mut w = this.col_widths(cx);
-                // no wider than the room left: a column that no longer fits is hidden, so
-                // widening one would make it (or its neighbour) vanish under the pointer
-                let most = (w[ix] + this.spare_width(cx)).clamp(w[ix].min(600.), 600.);
-                w[ix] = (sw - (f32::from(e.event.position.x) - sx)).clamp(70., most.max(70.)).round();
-                this.col_live = Some(w);
-                this.schedule_col_save(cx);
-                cx.notify();
-            }))
-            .child(col("h-name", t!("Ad"), SortKey::Name, None, false, cx))
+        let name_w = self.name_now(cx);
+        let h_off = self.h_off;
+        // the columns after Name: clipped to what the pane shows and scrolled sideways together, Name standing still
+        let mut side = h_flex().h_full().items_center().flex_shrink_0().relative().left(px(-h_off));
+        side = side
             .children(show_tags.then(|| plain("h-tags", t!("Dosya etiketi"), w[4]).child(handle(4, cx))))
             .children(show_git.then(|| plain("h-git", t!("Git durumu"), w[5]).child(handle(5, cx))))
             .children(show_sync.then(|| plain("h-sync", t!("Eşitleme durumu"), w[6]).child(handle(6, cx))))
@@ -2998,7 +3166,26 @@ impl FolderView {
                 let c = col("h-type", if search { t!("Konum") } else { t!("Tür") }, SortKey::Type, Some(self.type_col_w(cx)), false, cx).relative();
                 if search { c } else { c.child(handle(2, cx)) }
             }))
-            .children(vis.size.then(|| col("h-size", t!("Boyut"), SortKey::Size, Some(px(w[3])), true, cx).relative().child(handle(3, cx))))
+            .children(vis.size.then(|| col("h-size", t!("Boyut"), SortKey::Size, Some(px(w[3])), true, cx).relative().child(handle(3, cx))));
+        h_flex()
+            .h(px(30.))
+            .px(px(10.))
+            .overflow_hidden()
+            .text_xs()
+            .border_b_1()
+            .border_color(p.divider)
+            .on_drag_move(cx.listener(|this, e: &DragMoveEvent<ColumnResize>, _, cx| {
+                let Some((ix, sx, sw)) = this.col_drag else { return };
+                let mut w = this.col_widths(cx);
+                // The columns after Name scroll sideways: a column may grow past the pane's edge, and nothing is hidden any
+                // more for being too wide.
+                w[ix] = (sw - (f32::from(e.event.position.x) - sx)).clamp(70., 1000.).round();
+                this.col_live = Some(w);
+                this.schedule_col_save(cx);
+                cx.notify();
+            }))
+            .child(col("h-name", t!("Ad"), SortKey::Name, Some(px(name_w)), false, cx))
+            .child(div().h_full().flex().items_center().flex_shrink(1.).min_w_0().overflow_hidden().child(side))
     }
 
     /// Writes dragged column widths to Settings once the drag pauses (a save per move would
@@ -3047,6 +3234,8 @@ impl FolderView {
         let cw = self.col_widths(cx);
         let grouped = self.grouped();
         let row_h = self.row_h();
+        let name_w = self.name_now(cx);
+        let h_off = self.h_off;
         let (col_tags, col_git, col_sync) = (vis.tags, vis.git, vis.sync);
         let mut out = Vec::with_capacity(range.len());
         for r in range {
@@ -3290,8 +3479,8 @@ impl FolderView {
                 )
                 .child(
                     h_flex()
-                        .flex_1()
-                        .min_w(px(120.))
+                        .w(px(name_w))
+                        .flex_shrink_0()
                         .px_2()
                         .gap_2()
                         .items_center()
@@ -3345,77 +3534,97 @@ impl FolderView {
                         .child(div().flex_1())
                         .children(cloud_badge),
                 )
-                .children(tag_cell)
-                .children(git_cell)
-                .children(sync_cell)
-                .children(commit_cells)
-                .children(show_date.then(|| {
+                // the columns after Name: clipped to what the pane shows and scrolled sideways together, Name standing still
+                .child(
                     div()
-                        .w(px(cw[0]))
-                        .flex_shrink_0()
-                        .px_2()
-                        .text_color(p.text_secondary)
-                        .whitespace_nowrap()
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .flex_shrink(1.)
+                        .min_w_0()
                         .overflow_hidden()
-                        .text_ellipsis()
-                        .child(format::datetime(e.modified_ms))
-                }))
-                .children(show_created.then(|| {
-                    div()
-                        .w(px(cw[1]))
-                        .flex_shrink_0()
-                        .px_2()
-                        .text_color(p.text_secondary)
-                        .whitespace_nowrap()
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .child(format::datetime(e.created_ms))
-                }))
-                .when(show_type, |row| row.child(
-                    div()
-                        .w(type_w)
-                        .flex_shrink_0()
-                        .px_2()
-                        .text_color(p.text_secondary)
-                        .whitespace_nowrap()
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .child(if search_mode {
-                            self.parent_of(ei).map(|d| d.to_string_lossy().into_owned()).unwrap_or_default()
-                        } else {
-                            icons::type_label(e)
-                        }),
-                ))
-                .when(show_size, |row| {
-                    let cell = div().w(px(cw[3])).flex_shrink_0().px_2().flex().justify_end().whitespace_nowrap().overflow_hidden();
-                    let cell = match calc_link {
-                        // "Boyutu hesapla": measures just this folder (doesn't select the row)
-                        Some(dir) => cell.child(
-                            div()
-                                .id(("calc-size", vi))
-                                .text_xs()
-                                .text_color(p.text_tertiary)
-                                .cursor_pointer()
-                                .hover(|s| s.text_color(p.accent).underline())
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .child(t!("Boyutu hesapla"))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                                        cx.stop_propagation();
-                                        this.folder_size(dir.clone(), cx);
-                                        cx.notify();
-                                    }),
-                                ),
+                        .child(
+                            h_flex()
+                                .h_full()
+                                .items_center()
+                                .flex_shrink_0()
+                                .relative()
+                                .left(px(-h_off))
+                                .children(tag_cell)
+                                .children(git_cell)
+                                .children(sync_cell)
+                                .children(commit_cells)
+                                .children(show_date.then(|| {
+                                    div()
+                                        .w(px(cw[0]))
+                                        .flex_shrink_0()
+                                        .px_2()
+                                        .text_color(p.text_secondary)
+                                        .whitespace_nowrap()
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .child(format::datetime(e.modified_ms))
+                                }))
+                                .children(show_created.then(|| {
+                                    div()
+                                        .w(px(cw[1]))
+                                        .flex_shrink_0()
+                                        .px_2()
+                                        .text_color(p.text_secondary)
+                                        .whitespace_nowrap()
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .child(format::datetime(e.created_ms))
+                                }))
+                                .when(show_type, |row| {
+                                    row.child(
+                                        div()
+                                            .w(type_w)
+                                            .flex_shrink_0()
+                                            .px_2()
+                                            .text_color(p.text_secondary)
+                                            .whitespace_nowrap()
+                                            .overflow_hidden()
+                                            .text_ellipsis()
+                                            .child(if search_mode {
+                                                self.parent_of(ei).map(|d| d.to_string_lossy().into_owned()).unwrap_or_default()
+                                            } else {
+                                                icons::type_label(e)
+                                            }),
+                                    )
+                                })
+                                .when(show_size, |row| {
+                                    let cell = div().w(px(cw[3])).flex_shrink_0().px_2().flex().justify_end().whitespace_nowrap().overflow_hidden();
+                                    let cell = match calc_link {
+                                        // "Boyutu hesapla": measures just this folder (doesn't select the row)
+                                        Some(dir) => cell.child(
+                                            div()
+                                                .id(("calc-size", vi))
+                                                .text_xs()
+                                                .text_color(p.text_tertiary)
+                                                .cursor_pointer()
+                                                .hover(|s| s.text_color(p.accent).underline())
+                                                .overflow_hidden()
+                                                .text_ellipsis()
+                                                .child(t!("Boyutu hesapla"))
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                                        cx.stop_propagation();
+                                                        this.folder_size(dir.clone(), cx);
+                                                        cx.notify();
+                                                    }),
+                                                ),
+                                        ),
+                                        None => {
+                                            let text = if !e.is_dir() { format::size(e.size) } else { dir_size.clone().unwrap_or_default() };
+                                            cell.text_color(p.text_secondary).child(text)
+                                        }
+                                    };
+                                    row.child(cell)
+                                }),
                         ),
-                        None => {
-                            let text = if !e.is_dir() { format::size(e.size) } else { dir_size.clone().unwrap_or_default() };
-                            cell.text_color(p.text_secondary).child(text)
-                        }
-                    };
-                    row.child(cell)
-                })
+                )
                 // Settings → "Select files and folders on hover"
                 .when(hover_select, |row| {
                     row.on_hover(cx.listener(move |this, on: &bool, _, cx| {
@@ -3485,6 +3694,10 @@ impl FolderView {
         )
         .absolute()
         .size_full();
+        // (the pane got wider, a column narrower: the sideways offset stays within what there is to scroll to)
+        let details = self.view_mode == ViewMode::Details && list_body;
+        self.h_off = if details { self.h_off.clamp(0., self.sideways_most(cx)) } else { 0. };
+        let sideways = if details { self.sideways_bar(p, cx) } else { None };
         let header = (self.view_mode == ViewMode::Details).then(|| self.render_header(p, cx));
         v_flex()
             .size_full()
@@ -3501,8 +3714,12 @@ impl FolderView {
                         MouseButton::Left,
                         cx.listener(|this, ev: &MouseDownEvent, window, cx| {
                             window.focus(&this.focus, cx);
-                            // Settings → "Double-click an empty area to go up"
-                            if ev.click_count == 2 && cx.global::<crate::settings::Settings>().double_click_up {
+                            // Settings → "Double-click an empty area to go up" (the same pairing as a row: the third quick
+                            // click starts a new pair)
+                            let second = is_second_click(ev.click_count);
+                            let double = second && this.first_click.as_ref().is_some_and(|(g, n)| *g == this.generation && n.is_empty());
+                            this.first_click = (!second).then(|| (this.generation, std::sync::Arc::from("")));
+                            if double && cx.global::<crate::settings::Settings>().double_click_up {
                                 this.up(cx);
                                 return;
                             }
@@ -3544,6 +3761,35 @@ impl FolderView {
                         }),
                     )
                     .relative()
+                    .child({
+                        // a selection box follows the pointer everywhere, not only over the list (`marquee_moved`)
+                        let view = cx.entity().downgrade();
+                        canvas(
+                            |_, _, _| {},
+                            move |bounds, _, window, _| {
+                                let view = view.clone();
+                                window.on_mouse_event(move |ev: &MouseMoveEvent, phase, _, cx| {
+                                    if phase != DispatchPhase::Capture {
+                                        return;
+                                    }
+                                    let _ = view.update(cx, |v, cx| {
+                                        if v.marquee.is_none() {
+                                            return;
+                                        }
+                                        if ev.pressed_button == Some(MouseButton::Left) {
+                                            v.marquee_moved(ev.position, bounds, cx);
+                                        } else {
+                                            // (the button came up where nothing told us)
+                                            v.marquee = None;
+                                            cx.notify();
+                                        }
+                                    });
+                                });
+                            },
+                        )
+                        .absolute()
+                        .size_full()
+                    })
                     .children(self.render_marquee(p))
                     .on_drag_move::<ExternalPaths>(cx.listener(|this, ev: &DragMoveEvent<ExternalPaths>, _, cx| {
                         if let Some(dir) = this.current_dir() {
@@ -3566,7 +3812,8 @@ impl FolderView {
                     // so it doesn't sit over the right-aligned Size column
                     .when(list_body && cx.global::<crate::settings::Settings>().show_scrollbar, |d| {
                         d.child(Scrollbar::vertical(&self.scroll).id("list-scrollbar").mode(ScrollbarMode::Scrolling))
-                    }),
+                    })
+                    .children(sideways),
             )
             .into_any_element()
     }
@@ -3764,12 +4011,119 @@ impl FolderView {
     }
 }
 
+/// Whether a press is the second of a pair of quick clicks (2nd, 4th, 6th...): Windows' own pairing, where a third quick
+/// click is the first of the next pair.
+fn is_second_click(click_count: usize) -> bool {
+    click_count >= 2 && click_count % 2 == 0
+}
+
+/// A sideways bar's thumb: where it starts and how much of the track it takes, for `off` of `most` scrolled and `shown` of the
+/// content visible.
+fn bar_thumb(off: f32, most: f32, shown: f32) -> (f32, f32) {
+    let share = (shown / (shown + most).max(1.)).clamp(0.05, 1.);
+    let start = if most > 0. { (off / most).clamp(0., 1.) * (1. - share) } else { 0. };
+    (start, share)
+}
+
+/// The offset for a thumb dragged `left` pixels into a `track` pixels wide.
+fn bar_slide(left: f32, track: f32, most: f32, shown: f32) -> f32 {
+    let share = (shown / (shown + most).max(1.)).clamp(0.05, 1.);
+    let span = (track * (1. - share)).max(1.);
+    (left / span).clamp(0., 1.) * most
+}
+
+/// Where a selection box reaches for a pointer at `pos`: the point itself inside the list's `area` (left, top, right, bottom), the
+/// nearest point of the area beyond it; and how far the pointer is past the top (negative) or the bottom (positive) edge.
+fn marquee_reach(pos: (f32, f32), area: (f32, f32, f32, f32)) -> ((f32, f32), f32) {
+    let (l, t, r, b) = area;
+    let over = if pos.1 < t {
+        pos.1 - t
+    } else if pos.1 > b {
+        pos.1 - b
+    } else {
+        0.
+    };
+    ((pos.0.clamp(l, r.max(l)), pos.1.clamp(t, b.max(t))), over)
+}
+
+/// How fast the list scrolls under a selection box, in px a second, for a pointer `over` px past the top (negative: up) or the
+/// bottom edge: quicker the further out, between a walk and a run.
+fn marquee_scroll_speed(over: f32) -> f32 {
+    if over == 0. {
+        return 0.;
+    }
+    (over.abs() * 12.).clamp(240., 3000.) * over.signum()
+}
+
 /// Columns for a row of equal cards: as many as fit at `min` width, but enough that none is
 /// wider than `max` (all columns share the width evenly).
 fn tile_cols(avail: f32, min: f32, max: f32, gap: f32) -> u16 {
     let fit = ((avail + gap) / (min + gap)).floor().max(1.);
     let need = ((avail + gap) / (max + gap)).ceil().max(1.);
     need.min(fit) as u16
+}
+
+#[cfg(test)]
+mod click_tests {
+    use super::is_second_click;
+
+    #[test]
+    fn quick_clicks_pair_up_as_windows_counts_them() {
+        assert_eq!((1..=6).map(is_second_click).collect::<Vec<_>>(), [false, true, false, true, false, true]);
+    }
+}
+
+#[cfg(test)]
+mod sideways_tests {
+    use super::{bar_slide, bar_thumb};
+
+    #[test]
+    fn the_thumb_stays_in_its_track_and_the_ends_reach_the_ends() {
+        let (most, shown) = (900., 300.);
+        let (start, share) = bar_thumb(0., most, shown);
+        assert_eq!((start, share), (0., 0.25));
+        let (start, _) = bar_thumb(most, most, shown);
+        assert!((start + 0.25 - 1.).abs() < 1e-6);
+        // dragging to either end of the track scrolls to either end
+        assert_eq!(bar_slide(0., 400., most, shown), 0.);
+        assert_eq!(bar_slide(400., 400., most, shown), most);
+        // the thumb's middle over the track's middle: half of what there is to scroll
+        assert_eq!(bar_slide(150., 400., most, shown), most / 2.);
+    }
+}
+
+#[cfg(test)]
+mod marquee_tests {
+    use super::{marquee_reach, marquee_scroll_speed};
+
+    const AREA: (f32, f32, f32, f32) = (240., 130., 1000., 650.);
+
+    #[test]
+    fn inside_the_list_the_box_reaches_the_pointer_and_nothing_scrolls() {
+        assert_eq!(marquee_reach((500., 300.), AREA), ((500., 300.), 0.));
+        assert_eq!(marquee_scroll_speed(0.), 0.);
+    }
+
+    #[test]
+    fn beside_the_list_the_box_stops_at_its_edge() {
+        // over the sidebar, and right of the window
+        assert_eq!(marquee_reach((40., 300.), AREA), ((240., 300.), 0.));
+        assert_eq!(marquee_reach((1900., 300.), AREA), ((1000., 300.), 0.));
+    }
+
+    #[test]
+    fn above_and_below_the_list_it_stops_at_the_edge_and_the_list_scrolls_that_way() {
+        let (at, over) = marquee_reach((500., 100.), AREA);
+        assert_eq!((at, over), ((500., 130.), -30.));
+        assert!(marquee_scroll_speed(over) < 0., "up");
+        let (at, over) = marquee_reach((-20., 900.), AREA);
+        assert_eq!((at, over), ((240., 650.), 250.));
+        assert!(marquee_scroll_speed(over) > 0., "down");
+        // quicker the further out, within limits
+        assert!(marquee_scroll_speed(200.) > marquee_scroll_speed(30.));
+        assert_eq!(marquee_scroll_speed(1.), 240.);
+        assert_eq!(marquee_scroll_speed(-5000.), -3000.);
+    }
 }
 
 #[cfg(test)]
@@ -4025,6 +4379,7 @@ impl Render for FolderView {
         let content = div().size_full().relative().child(canvas(
             move |_, _, _| {},
             move |bounds, _, window, _| {
+                let side_view = view.clone();
                 window.on_mouse_event(move |e: &ScrollEvent, phase, _window, cx| {
                     if phase == DispatchPhase::Capture
                         && e.modifiers.control
@@ -4035,6 +4390,30 @@ impl Render for FolderView {
                         let grow = e.delta.pixel_delta(px(24.)).y < px(0.);
                         cx.stop_propagation();
                         let _ = view.update(cx, |v, cx| v.wheel_zoom(grow, cx));
+                    }
+                });
+                // Shift and the wheel, or a sideways wheel (a touchpad): the Details columns after Name scroll sideways.
+                window.on_mouse_event(move |e: &ScrollEvent, phase, _window, cx| {
+                    if phase != DispatchPhase::Capture || e.modifiers.control || !bounds.contains(&e.position) {
+                        return;
+                    }
+                    let d = e.delta.pixel_delta(px(40.));
+                    let (x, y) = (f32::from(d.x), f32::from(d.y));
+                    let dx = if x != 0. { x } else if e.modifiers.shift { y } else { 0. };
+                    if dx == 0. {
+                        return;
+                    }
+                    let used = side_view
+                        .update(cx, |v, cx| {
+                            if v.view_mode != ViewMode::Details || v.sideways_most(cx) < 1. {
+                                return false;
+                            }
+                            v.scroll_sideways_to(v.h_off - dx, cx);
+                            true
+                        })
+                        .unwrap_or(false);
+                    if used {
+                        cx.stop_propagation();
                     }
                 });
             },

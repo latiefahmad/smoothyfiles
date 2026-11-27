@@ -428,12 +428,17 @@ pub fn look_send(path: PathBuf, size: u64, follow: bool) {
 /// A real file for an item inside an archive: extracted once (blocking), then reused while the
 /// archive is unchanged. `None` when it isn't in an archive or can't be extracted.
 pub fn real_copy(path: &Path) -> Option<PathBuf> {
+    real_copy_with(path, &|| false)
+}
+
+/// [`real_copy`] that can be given up part way: `cancelled` is asked while the member is decoded (the partial file is removed).
+pub fn real_copy_with(path: &Path, cancelled: &dyn Fn() -> bool) -> Option<PathBuf> {
     let (archive, inner) = split(path)?;
     let key = (archive.clone(), mtime_ms(&archive), inner);
     if let Some(p) = LOOK_COPIES.lock().unwrap().as_ref().and_then(|m| m.get(&key).cloned()).filter(|p| p.exists()) {
         return Some(p);
     }
-    match extract_items(&[path.to_path_buf()], &|| false, &mut |_| {}) {
+    match extract_items(&[path.to_path_buf()], cancelled, &mut |_| {}) {
         Ok(mut v) => {
             let p = v.pop()?;
             let mut g = LOOK_COPIES.lock().unwrap();
@@ -444,6 +449,7 @@ pub fn real_copy(path: &Path) -> Option<PathBuf> {
             m.insert(key, p.clone());
             Some(p)
         }
+        Err(e) if e.downcast_ref::<rf_archive::Cancelled>().is_some() => None,
         Err(e) => {
             log::warn!("archive item {path:?}: {e:#}");
             None
@@ -453,6 +459,38 @@ pub fn real_copy(path: &Path) -> Option<PathBuf> {
 
 /// Members up to this size are extracted for the preview pane as the selection moves.
 pub const PREVIEW_EXTRACT_MAX: u64 = LOOK_FOLLOW_MAX;
+
+/// Bigger members, up to this size, are extracted for the pane once the selection has rested on them.
+pub const PREVIEW_EXTRACT_RESTED_MAX: u64 = 1 << 30;
+
+/// How long the selection must rest on a big member before the pane extracts it.
+pub const PREVIEW_REST: std::time::Duration = std::time::Duration::from_millis(600);
+
+/// When the preview pane extracts a member of an archive to show it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaneCopy {
+    /// As soon as it is selected.
+    AtOnce,
+    /// Once the selection has rested on it for [`PREVIEW_REST`]; given up when the selection moves on.
+    Rested,
+    /// Only when the user asks for it (Play).
+    Asked,
+}
+
+/// The rule for a member of `size` bytes.
+///
+/// WHY (rustyfiles Discord, 2026-11-24: "large image files (>64MB) inside archives" showed in DirectLook and not in the pane): the
+/// pane took nothing over 64 MB, so that arrow-keying through an archive did not decode every big member on the way. Resting on
+/// one is not passing over it. A very big one is still left alone: its copy would fill the temp folder for a glance.
+pub fn pane_copy(size: u64) -> PaneCopy {
+    if size <= PREVIEW_EXTRACT_MAX {
+        PaneCopy::AtOnce
+    } else if size <= PREVIEW_EXTRACT_RESTED_MAX {
+        PaneCopy::Rested
+    } else {
+        PaneCopy::Asked
+    }
+}
 
 /// "a.txt" or "3 öğe" for a title.
 fn names(paths: &[PathBuf]) -> String {
@@ -465,6 +503,15 @@ fn names(paths: &[PathBuf]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pane_extracts_small_members_at_once_big_ones_after_a_rest_and_huge_ones_only_when_asked() {
+        assert_eq!(pane_copy(0), PaneCopy::AtOnce);
+        assert_eq!(pane_copy(64 << 20), PaneCopy::AtOnce);
+        assert_eq!(pane_copy((64 << 20) + 1), PaneCopy::Rested);
+        assert_eq!(pane_copy(1 << 30), PaneCopy::Rested);
+        assert_eq!(pane_copy((1 << 30) + 1), PaneCopy::Asked);
+    }
 
     #[test]
     fn extracts_just_the_items_asked_for() {

@@ -276,6 +276,8 @@ impl Render for DialogView {
             .items_center()
             .justify_center()
             .bg(hsla(0., 0., 0., 0.35))
+            // (the wheel over the dialog is the dialog's: at the end of its list it must not scroll the folder behind)
+            .occlude()
             .track_focus(&self.focus)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
