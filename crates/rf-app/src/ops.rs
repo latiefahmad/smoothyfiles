@@ -298,11 +298,12 @@ impl FolderView {
         rf_win::sta::run(move |owner| {
             let _ = tx.send(rf_win::clipboard::get_files(owner).map_err(|e| log::warn!("paste: {e:#}")).ok().flatten());
         });
+        let fallback = t!("Kısayol").to_string();
         cx.spawn(async move |this, cx| {
             let Ok(Some((paths, _))) = rx.await else { return };
             let work = cx.background_spawn(async move {
                 for p in paths {
-                    let stem = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Kısayol".into());
+                    let stem = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| fallback.clone());
                     // never overwrite: "x.lnk", "x (2).lnk", …
                     let mut link = dir.join(format!("{stem}.lnk"));
                     let mut n = 2;
@@ -458,8 +459,9 @@ impl FolderView {
             }
             return;
         }
+        let name = if folder { t!("Yeni klasör") } else { t!("Yeni metin belgesi") }.to_string();
         let task = cx.background_spawn(async move {
-            if folder { fileops::new_folder(&dir) } else { fileops::new_text_file(&dir) }
+            if folder { fileops::new_folder(&dir, &name) } else { fileops::new_text_file(&dir, &name) }
         });
         cx.spawn(async move |this, cx| {
             if let Ok(path) = task.await {
@@ -480,7 +482,8 @@ impl FolderView {
         if items.is_empty() {
             return;
         }
-        let task = cx.background_spawn(async move { fileops::new_folder(&dir) });
+        let name = t!("Yeni klasör").to_string();
+        let task = cx.background_spawn(async move { fileops::new_folder(&dir, &name) });
         cx.spawn(async move |this, cx| {
             if let Ok(folder) = task.await {
                 let name = folder.file_name().map(|n| n.to_string_lossy().into_owned());

@@ -102,15 +102,15 @@ pub fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
     unsafe { MoveFileExW(PCWSTR(a.as_ptr()), PCWSTR(b.as_ptr()), MOVE_FILE_FLAGS(0)) }.map_err(|e| std::io::Error::from_raw_os_error(e.code().0 & 0xFFFF))
 }
 
-/// "Yeni klasör", "Yeni klasör (2)", … — returns the created path.
-pub fn new_folder(dir: &Path) -> anyhow::Result<PathBuf> {
-    let p = unique_name(dir, "Yeni klasör", "");
+/// `name`, `name (2)`, … (the caller passes the name in the UI language) — returns the created path.
+pub fn new_folder(dir: &Path, name: &str) -> anyhow::Result<PathBuf> {
+    let p = unique_name(dir, name, "");
     std::fs::create_dir(&p)?;
     Ok(p)
 }
 
-pub fn new_text_file(dir: &Path) -> anyhow::Result<PathBuf> {
-    let p = unique_name(dir, "Yeni Metin Belgesi", ".txt");
+pub fn new_text_file(dir: &Path, name: &str) -> anyhow::Result<PathBuf> {
+    let p = unique_name(dir, name, ".txt");
     std::fs::OpenOptions::new().write(true).create_new(true).open(&p)?;
     Ok(p)
 }
@@ -304,11 +304,11 @@ mod tests {
     fn unique() {
         let d = std::env::temp_dir().join(format!("rf-uniq-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
-        let a = new_folder(&d).unwrap();
-        let b = new_folder(&d).unwrap();
+        let a = new_folder(&d, "Yeni klasör").unwrap();
+        let b = new_folder(&d, "Yeni klasör").unwrap();
         assert!(a.ends_with("Yeni klasör"));
         assert!(b.ends_with("Yeni klasör (2)"));
-        let f = new_text_file(&d).unwrap();
+        let f = new_text_file(&d, "Yeni Metin Belgesi").unwrap();
         assert!(rename(&f, "x.txt").unwrap());
         assert!(d.join("x.txt").exists());
         assert!(transfer(Transfer::Copy, &[d.join("x.txt")], &d).unwrap());

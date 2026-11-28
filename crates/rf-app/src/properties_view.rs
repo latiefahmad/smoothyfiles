@@ -1754,7 +1754,7 @@ impl Render for PropsView {
             }
         }
         let title = match (self.single(), &self.drive) {
-            (_, Some(d)) => format!("{} — {}", d.display_name(), t!("Özellikler")),
+            (_, Some(d)) => format!("{} — {}", crate::places::drive_name(d), t!("Özellikler")),
             (Some(path), None) => format!("{} — {}", file_name(path), t!("Özellikler")),
             (None, None) => format!("{} — {}", crate::i18n::items(self.paths.len()), t!("Özellikler")),
         };
@@ -1776,7 +1776,7 @@ impl Render for PropsView {
             (None, None) => Icon::new(if self.paths.len() > 1 { L::Files } else { L::File }).size(px(40.)).text_color(p.text_secondary).into_any_element(),
         };
         let name: AnyElement = match (&self.name, &self.drive) {
-            (_, Some(d)) => div().flex_1().text_base().font_weight(FontWeight::SEMIBOLD).child(d.display_name()).into_any_element(),
+            (_, Some(d)) => div().flex_1().text_base().font_weight(FontWeight::SEMIBOLD).child(crate::places::drive_name(d)).into_any_element(),
             (Some(n), None) => text_field(&p, n),
             (None, None) => div().flex_1().text_base().font_weight(FontWeight::SEMIBOLD).child(crate::i18n::items(self.paths.len())).into_any_element(),
         };
